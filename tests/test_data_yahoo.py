@@ -13,7 +13,7 @@ class FakeTicker:
     def dividends(self):
         if self.fail:
             raise RuntimeError("boom")
-        idx = pd.to_datetime(["2022-05-01", "2023-05-01", "2023-11-01", "2024-05-01"])
+        idx = pd.to_datetime(["2022-01-15", "2023-05-01", "2023-11-01", "2024-05-01"])
         return pd.Series([1.0, 1.0, 1.0, 3.0], index=idx)
 
     @property
@@ -101,3 +101,20 @@ def test_eps_and_bvps_dropped_when_financial_currency_differs():
     f = YahooProvider(ticker_factory=_recent_ticker({"currency": "BRL", "financialCurrency": "USD"})).fetch("VALE3", "br")
     assert f.eps is None and f.bvps is None and f.price == 40.0
     assert (f.currency, f.financial_currency) == ("BRL", "USD")
+
+
+def test_first_partial_year_of_history_is_dropped():
+    idx = pd.to_datetime(["2021-08-01", "2022-01-10", "2023-01-10", "2024-01-10", "2025-01-10"])
+
+    class Trunc(FakeTicker):
+        @property
+        def dividends(self):
+            return pd.Series([1.0, 2.0, 3.0, 4.0, 5.0], index=idx)
+
+    f = YahooProvider(ticker_factory=Trunc).fetch("MXRF11", "br")
+    assert f.annual_dividends == [2.0, 3.0, 4.0, 5.0]
+
+
+def test_absurd_payout_discards_eps_and_payout():
+    f = YahooProvider(ticker_factory=_recent_ticker({"trailingEps": 0.5})).fetch("VALE3", "br")
+    assert f.payout is None and f.eps is None and f.price == 40.0

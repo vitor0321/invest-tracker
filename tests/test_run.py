@@ -94,7 +94,7 @@ def rising_six_years():
 
     class T:
         dividends = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-                              index=pd.to_datetime([f"{y}-06-01" for y in range(2020, 2026)]))
+                              index=pd.to_datetime([f"{y}-01-15" for y in range(2020, 2026)]))
         info = {"currentPrice": 25.0, "trailingEps": 4.0, "bookValue": 30.0, "payoutRatio": 0.5,
                 "totalDebt": 100.0, "totalCash": 50.0, "ebitda": 100.0}
 
@@ -189,3 +189,8 @@ def test_run_once_passes_manual_vpa_from_watchlist_and_params():
     rows, _ = run_once({}, [WatchItem("XPML11", "fii", 109.39), WatchItem("HGLG11", "fii")], params,
                        P2(), {}, NOW, lambda *a: None)
     assert {r.ticker: r.signal for r in rows} == {"XPML11": "oportunidade", "HGLG11": "oportunidade"}
+
+
+def test_unit_tickers_do_not_use_per_share_eps():
+    row = analyze("TAEE11", "acao_br", good("TAEE11"), PARAMS, held=False, now=NOW)
+    assert row.graham is None and row.bazin == 50.0

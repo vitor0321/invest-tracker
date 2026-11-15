@@ -6,6 +6,9 @@ from typing import Callable
 from invest.data.base import Fundamentals, Market, log, normalize_ticker
 
 
+MAX_CREDIBLE_PAYOUT = 3.0
+
+
 def _default_factory(symbol: str):
     import yfinance as yf
 
@@ -15,8 +18,12 @@ def _default_factory(symbol: str):
 def _annual_totals(dividends) -> list[float]:
     """Soma por ano civil, só anos completos, últimos 6 (5 comparações ano a ano)."""
     by_year: dict[int, float] = {}
+    first = None
     for ts, value in dividends.items():
         by_year[ts.year] = by_year.get(ts.year, 0.0) + float(value)
+        first = ts if first is None or ts < first else first
+    if first is not None and first.month > 2:
+        by_year.pop(first.year, None)  # histórico do Yahoo começa no meio do ano: ano parcial
     current = datetime.now(timezone.utc).year
     years = sorted(y for y in by_year if y < current)
     return [round(by_year[y], 6) for y in years][-6:]
@@ -72,6 +79,8 @@ class YahooProvider:
                 result.eps = result.bvps = None  # lucro em outra moeda: não comparável com a cotação
             if info.get("sector") != "Real Estate" and result.eps and result.eps > 0:
                 result.payout = result.dividend_12m / result.eps
+                if result.payout > MAX_CREDIBLE_PAYOUT:  # LPA incoerente com os dividendos
+                    result.eps = result.payout = None
         except Exception as exc:  # fonte instável: nunca derruba a rodada
             log.warning("yahoo falhou para %s: %s", ticker, exc)
             return Fundamentals(ticker=ticker, source="yahoo")

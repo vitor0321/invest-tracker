@@ -19,7 +19,8 @@ def main() -> None:
         print(f"\n== {kind} ==")
         for t in tickers:
             f = provider.fetch(t, market)
-            avg = sum(f.annual_dividends) / len(f.annual_dividends) if f.annual_dividends else None
+            last5 = f.annual_dividends[-5:]
+            avg = sum(last5) / len(last5) if last5 else None
             print(
                 f"{t:8} preço={f.price} div_médio_5a={avg} div_12m={f.dividend_12m} "
                 f"LPA={f.eps} VPA={f.bvps} payout_próprio={f.payout} "

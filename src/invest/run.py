@@ -72,7 +72,8 @@ def analyze(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool, now:
             return row("sem_dados")
         divs = f.annual_dividends[-5:]
         bazin = bazin_ceiling(divs, p.target_dy) if kind == "acao_br" else None
-        graham = graham_fair_price(f.eps, bvps, p.graham_factor) if f.eps and bvps else None
+        per_share_eps = f.eps if not ticker.endswith("11") else None  # unit: LPA do Yahoo é por ação
+        graham = graham_fair_price(per_share_eps, bvps, p.graham_factor) if per_share_eps and bvps else None
         if f.annual_dividends and f.annual_dividends[-1] > 0:
             g = min(_growth(divs), GROWTH_CAP)
             gordon = gordon_price(f.annual_dividends[-1] * (1 + g), p.required_return, g)
