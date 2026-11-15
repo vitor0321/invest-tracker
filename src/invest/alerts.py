@@ -13,8 +13,7 @@ def render_email(changes: list[SignalChange], rows: list[AnalysisRow] | None = N
         line = f"{c.ticker}: {c.old} -> {c.new} ({c.date})"
         r = by_ticker.get(c.ticker)
         if r:
-            refs = [v for v in (r.bazin, r.graham, r.gordon) if v is not None]
-            ref = f"{min(refs):.2f}" if refs else "sem preço de referência"
+            ref = f"{r.reference:.2f}" if r.reference is not None else "sem preço de referência"
             price = f"{r.price:.2f}" if r.price is not None else "sem preço"
             line += f"\n   preço {price}, referência {ref}, fonte {r.source}"
         lines.append(line)

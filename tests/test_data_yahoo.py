@@ -118,3 +118,10 @@ def test_first_partial_year_of_history_is_dropped():
 def test_absurd_payout_discards_eps_and_payout():
     f = YahooProvider(ticker_factory=_recent_ticker({"trailingEps": 0.5})).fetch("VALE3", "br")
     assert f.payout is None and f.eps is None and f.price == 40.0
+
+
+def test_small_dividend_dips_do_not_break_the_no_cut_streak():
+    from invest.data.yahoo import _years_without_cut
+
+    assert _years_without_cut([1.0, 0.85, 0.9, 1.0, 1.1, 1.2]) == 5
+    assert _years_without_cut([1.0, 1.0, 0.5, 1.0]) == 1

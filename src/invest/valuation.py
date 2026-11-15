@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+DIVIDEND_CUT_TOLERANCE = 0.20  # queda maior que isso conta como corte
+
 
 def bazin_ceiling(annual_dividends: list[float], target_dy: float = 0.06) -> float | None:
     if not annual_dividends or target_dy <= 0:

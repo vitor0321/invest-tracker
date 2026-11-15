@@ -194,3 +194,36 @@ def test_run_once_passes_manual_vpa_from_watchlist_and_params():
 def test_unit_tickers_do_not_use_per_share_eps():
     row = analyze("TAEE11", "acao_br", good("TAEE11"), PARAMS, held=False, now=NOW)
     assert row.graham is None and row.bazin == 50.0
+
+
+# --- calibragem após a primeira rodada real ---
+def test_gordon_growth_is_floored_at_zero():
+    f = good()
+    f.annual_dividends = [4.0, 3.0, 2.0, 1.0, 0.5]
+    row = analyze("ITUB4", "acao_br", f, PARAMS, held=False, now=NOW)
+    assert row.gordon == pytest.approx(5.0)  # 0,5 / 0,10, nunca abaixo disso
+
+
+def test_small_dividend_dip_is_not_risk_but_a_big_cut_is():
+    f = good()
+    f.annual_dividends = [3.0, 3.0, 3.0, 3.0, 2.6]  # -13%
+    assert analyze("ITUB4", "acao_br", f, PARAMS, held=False, now=NOW).signal != "risco"
+    f.annual_dividends = [3.0, 3.0, 3.0, 3.0, 2.0]  # -33%
+    assert analyze("ITUB4", "acao_br", f, PARAMS, held=False, now=NOW).signal == "risco"
+
+
+def test_row_exposes_reference_for_stocks_and_fiis():
+    r1 = analyze("ITUB4", "acao_br", good(), PARAMS, held=False, now=NOW)
+    assert r1.reference == pytest.approx(min(r1.bazin, r1.graham, r1.gordon))
+    f = good("MXRF11", price=8.75)
+    f.bvps, f.dividend_12m, f.months_paid_12m = 9.926, 1.19, 12
+    r2 = analyze("MXRF11", "fii", f, PARAMS, held=False, now=NOW)
+    assert r2.reference == pytest.approx(9.926 * 1.10)
+
+
+def test_email_shows_reference_for_fii():
+    from invest.sheets import AnalysisRow as AR
+
+    row = AR("fii", "MXRF11", 8.75, None, None, None, 19.9, 60, "oportunidade", "yahoo", "d", reference=10.92)
+    _, body = render_email([SignalChange("MXRF11", "novo", "oportunidade", "d")], [row])
+    assert "10.92" in body

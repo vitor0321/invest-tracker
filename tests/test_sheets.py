@@ -128,3 +128,12 @@ def test_manual_vpa_columns_roundtrip():
     assert read_watchlist(sh)[1].vpa_manual is None
     p = read_params(sh)
     assert p.vpa_manual == {"AGRO3": 158.0}
+
+
+def test_seed_watchlist_uses_current_codes_and_etf_type():
+    sh = make_sheet()
+    ensure_tabs(sh)
+    items = {i.ticker: i.kind for i in read_watchlist(sh)}
+    assert "CPLE6" not in items and items["CPLE3"] == "acao_br"
+    assert items["SCHD"] == "etf"
+    assert "Referência" in sh.tabs["Análise"].values[0]

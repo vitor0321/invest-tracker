@@ -34,10 +34,10 @@ SEED_TYPES = (
 )
 
 SEED_WATCHLIST = (
-    [(t, "acao_br") for t in ["TAEE11", "CPLE6", "SAPR11", "CMIG4", "PETR4", "ABEV3",
+    [(t, "acao_br") for t in ["TAEE11", "CPLE3", "SAPR11", "CMIG4", "PETR4", "ABEV3",
                               "WEGE3", "TIMS3", "ITUB4", "CXSE3"]]
     + [(t, "fii") for t in ["MXRF11", "XPML11", "KNRI11", "HGLG11", "VISC11"]]
-    + [(t, "eua") for t in ["JNJ", "KO", "PG", "SCHD", "O"]]
+    + [(t, "eua") for t in ["JNJ", "KO", "PG", "O"]] + [("SCHD", "etf")]
 )
 
 
@@ -79,6 +79,7 @@ class AnalysisRow:
     signal: str
     source: str
     collected_at: str
+    reference: float | None = None
 
 
 @dataclass
@@ -145,7 +146,7 @@ def ensure_tabs(sh) -> None:
             write_tab(sh, HISTORY, [["Data", "Papel", "De", "Para"]])
 
 
-ANALYSIS_HEADER = ["Tipo", "Papel", "Preço", "Bazin", "Graham", "Gordon", "Folga %",
+ANALYSIS_HEADER = ["Tipo", "Papel", "Preço", "Bazin", "Graham", "Gordon", "Referência", "Folga %",
                    "Nota", "Sinal", "Fonte", "Coletado em"]
 
 
@@ -186,7 +187,7 @@ def read_watchlist(sh) -> list[WatchItem]:
 
 def write_analysis(sh, rows: list[AnalysisRow]) -> None:
     body = [
-        [r.kind, r.ticker, r.price, r.bazin, r.graham, r.gordon, r.slack_pct,
+        [r.kind, r.ticker, r.price, r.bazin, r.graham, r.gordon, r.reference, r.slack_pct,
          r.score, r.signal, r.source, r.collected_at]
         for r in rows
     ]

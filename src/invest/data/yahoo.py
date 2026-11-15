@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
+from invest.valuation import DIVIDEND_CUT_TOLERANCE
 from invest.data.base import Fundamentals, Market, log, normalize_ticker
 
 
@@ -33,7 +34,7 @@ def _annual_totals(dividends) -> list[float]:
 def _years_without_cut(annual: list[float]) -> int:
     count = 0
     for prev, cur in zip(reversed(annual[:-1]), reversed(annual[1:])):
-        if cur >= prev:
+        if cur >= prev * (1 - DIVIDEND_CUT_TOLERANCE):
             count += 1
         else:
             break

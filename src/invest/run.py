@@ -12,6 +12,7 @@ from invest.data.yahoo import YahooProvider
 from invest.scoring import classify, compute_score
 from invest.sheets import AnalysisRow, Params, SignalChange, WatchItem
 from invest.valuation import (
+    DIVIDEND_CUT_TOLERANCE,
     FiiMetrics, QualityResult, bazin_ceiling, check_quality, fii_quality,
     gordon_price, graham_fair_price, reference_price,
 )
@@ -46,8 +47,9 @@ def analyze(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool, now:
             manual_bvps: float | None = None) -> AnalysisRow:
     date = f.collected_at.date().isoformat()
 
-    def row(signal, bazin=None, graham=None, gordon=None, slack=None, score=None):
-        return AnalysisRow(kind, ticker, f.price, bazin, graham, gordon, slack, score, signal, f.source, date)
+    def row(signal, bazin=None, graham=None, gordon=None, slack=None, score=None, reference=None):
+        return AnalysisRow(kind, ticker, f.price, bazin, graham, gordon, slack, score, signal,
+                           f.source, date, reference)
 
     age = (now - f.collected_at).days
     bvps = f.bvps if f.bvps is not None else manual_bvps
@@ -75,19 +77,20 @@ def analyze(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool, now:
         per_share_eps = f.eps if not ticker.endswith("11") else None  # unit: LPA do Yahoo é por ação
         graham = graham_fair_price(per_share_eps, bvps, p.graham_factor) if per_share_eps and bvps else None
         if f.annual_dividends and f.annual_dividends[-1] > 0:
-            g = min(_growth(divs), GROWTH_CAP)
+            g = max(0.0, min(_growth(divs), GROWTH_CAP))
             gordon = gordon_price(f.annual_dividends[-1] * (1 + g), p.required_return, g)
         reference = reference_price([bazin, graham, gordon])
         quality = check_quality(f.payout, f.net_debt_ebitda, f.years_without_cut,
                                 p.max_payout, p.max_leverage)
         regularity = len([d for d in divs if d > 0]) / 5
-        dividend_cut = len(f.annual_dividends) >= 2 and f.annual_dividends[-1] < f.annual_dividends[-2]
+        dividend_cut = (len(f.annual_dividends) >= 2
+                        and f.annual_dividends[-1] < f.annual_dividends[-2] * (1 - DIVIDEND_CUT_TOLERANCE))
 
     signal = classify(f.price, reference, quality, dividend_cut, f.payout, age, held,
                       p.max_age_days, p.max_payout)
     score = compute_score(f.price, reference, quality.passed, regularity, p.weights)
     slack = round((reference - f.price) / reference * 100, 1) if reference else None
-    return row(signal, bazin, graham, gordon, slack, score)
+    return row(signal, bazin, graham, gordon, slack, score, reference)
 
 
 def run_once(holdings: dict[str, float], watch: list[WatchItem], params: Params,
