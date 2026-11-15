@@ -1,0 +1,24 @@
+name: daily
+on:
+  schedule:
+    - cron: "0 21 * * 1-5"   # 18h em Brasília, dias úteis
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Não enviar e-mail nem gravar histórico"
+        type: boolean
+        default: false
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e '.[dev]'
+      - run: pytest -q
+      - run: python -m invest.run ${{ inputs.dry_run && '--dry-run' || '' }}
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
