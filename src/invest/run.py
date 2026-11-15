@@ -42,13 +42,15 @@ def _growth(annual: list[float]) -> float:
     return (annual[-1] / annual[0]) ** (1 / (len(annual) - 1)) - 1
 
 
-def analyze(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool, now: datetime) -> AnalysisRow:
+def analyze(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool, now: datetime,
+            manual_bvps: float | None = None) -> AnalysisRow:
     date = f.collected_at.date().isoformat()
 
     def row(signal, bazin=None, graham=None, gordon=None, slack=None, score=None):
         return AnalysisRow(kind, ticker, f.price, bazin, graham, gordon, slack, score, signal, f.source, date)
 
     age = (now - f.collected_at).days
+    bvps = f.bvps if f.bvps is not None else manual_bvps
     if f.price is None:
         return row("dado_velho" if age > p.max_age_days else "sem_dados")
     if kind == "etf":
@@ -58,11 +60,11 @@ def analyze(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool, now:
     if kind == "fii":
         quality = QualityResult(False, ["sem_dados"])
         reference = None
-        if f.bvps:
-            pvp = f.price / f.bvps
+        if bvps:
+            pvp = f.price / bvps
             dy = (f.dividend_12m / f.price) if f.dividend_12m is not None else None
             quality = fii_quality(FiiMetrics(pvp, dy, f.months_paid_12m))
-            reference = f.bvps * 1.10
+            reference = bvps * 1.10
         regularity = f.months_paid_12m / 12
         dividend_cut = False
     else:
@@ -70,7 +72,7 @@ def analyze(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool, now:
             return row("sem_dados")
         divs = f.annual_dividends[-5:]
         bazin = bazin_ceiling(divs, p.target_dy) if kind == "acao_br" else None
-        graham = graham_fair_price(f.eps, f.bvps, p.graham_factor) if f.eps and f.bvps else None
+        graham = graham_fair_price(f.eps, bvps, p.graham_factor) if f.eps and bvps else None
         if f.annual_dividends and f.annual_dividends[-1] > 0:
             g = min(_growth(divs), GROWTH_CAP)
             gordon = gordon_price(f.annual_dividends[-1] * (1 + g), p.required_return, g)
@@ -91,11 +93,12 @@ def run_once(holdings: dict[str, float], watch: list[WatchItem], params: Params,
              provider: DataProvider, previous: dict[str, str], now: datetime,
              send: Callable[[str, str, str], None],
              record: Callable[[list[SignalChange]], None] | None = None) -> tuple[list[AnalysisRow], list[SignalChange]]:
-    targets: list[tuple[str, str | None, bool]] = [
-        (t, params.types.get(t), True) for t in holdings
-    ] + [(w.ticker, w.kind, False) for w in watch if w.ticker not in holdings]
+    targets: list[tuple[str, str | None, bool, float | None]] = [
+        (t, params.types.get(t), True, params.vpa_manual.get(t)) for t in holdings
+    ] + [(w.ticker, w.kind, False, w.vpa_manual or params.vpa_manual.get(w.ticker))
+         for w in watch if w.ticker not in holdings]
     rows: list[AnalysisRow] = []
-    for ticker, kind, held in targets:
+    for ticker, kind, held, manual in targets:
         kind = kind.strip().lower() if kind else None
         if kind not in VALID_KINDS:
             rows.append(AnalysisRow("sem_tipo", ticker, None, None, None, None, None, None,
@@ -107,7 +110,7 @@ def run_once(holdings: dict[str, float], watch: list[WatchItem], params: Params,
         except Exception as exc:
             log.warning("falha ao buscar %s: %s", ticker, exc)
             f = Fundamentals(ticker=ticker, source="erro", collected_at=now)
-        rows.append(analyze(ticker, kind, f, params, held, now))
+        rows.append(analyze(ticker, kind, f, params, held, now, manual))
     current = {r.ticker: r.signal for r in rows}
     changes = detect_changes(previous, current, now.date().isoformat())
     if changes:

@@ -59,13 +59,19 @@ class YahooProvider:
             result.price = info.get("currentPrice") or info.get("regularMarketPrice")
             result.eps = info.get("trailingEps")
             result.bvps = info.get("bookValue")
-            result.payout = info.get("payoutRatio")
             debt, cash, ebitda = info.get("totalDebt"), info.get("totalCash"), info.get("ebitda")
             if debt is not None and cash is not None and ebitda:
                 result.net_debt_ebitda = (debt - cash) / ebitda
             result.annual_dividends = _annual_totals(t.dividends)
             result.years_without_cut = _years_without_cut(result.annual_dividends)
             result.dividend_12m, result.months_paid_12m = _trailing_12m(t.dividends)
+            result.currency = info.get("currency")
+            result.financial_currency = info.get("financialCurrency")
+            if (result.currency and result.financial_currency
+                    and result.currency != result.financial_currency):
+                result.eps = result.bvps = None  # lucro em outra moeda: não comparável com a cotação
+            if info.get("sector") != "Real Estate" and result.eps and result.eps > 0:
+                result.payout = result.dividend_12m / result.eps
         except Exception as exc:  # fonte instável: nunca derruba a rodada
             log.warning("yahoo falhou para %s: %s", ticker, exc)
             return Fundamentals(ticker=ticker, source="yahoo")

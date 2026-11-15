@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from gspread.exceptions import WorksheetNotFound  # noqa: F401 (reexportado)
 
@@ -49,6 +49,7 @@ class ForbiddenTabError(Exception):
 class WatchItem:
     ticker: str
     kind: str
+    vpa_manual: float | None = None
 
 
 @dataclass
@@ -62,6 +63,7 @@ class Params:
     weights: dict[str, float]
     email: str
     types: dict[str, str]
+    vpa_manual: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -129,14 +131,14 @@ def ensure_tabs(sh) -> None:
         sh.add_worksheet(title=title, rows=1000, cols=12)
         if title == PARAMS:
             n = max(len(DEFAULT_PARAMS), len(SEED_TYPES))
-            rows = [["Parâmetro", "Valor", "", "Papel", "Tipo"]]
+            rows = [["Parâmetro", "Valor", "", "Papel", "Tipo", "VPA manual"]]
             for i in range(n):
                 left = list(DEFAULT_PARAMS[i]) if i < len(DEFAULT_PARAMS) else ["", ""]
                 right = list(SEED_TYPES[i]) if i < len(SEED_TYPES) else ["", ""]
-                rows.append(left + [""] + right)
+                rows.append(left + [""] + right + [""])
             write_tab(sh, PARAMS, rows)
         elif title == WATCH:
-            write_tab(sh, WATCH, [["Papel", "Tipo"]] + [list(x) for x in SEED_WATCHLIST])
+            write_tab(sh, WATCH, [["Papel", "Tipo", "VPA manual"]] + [list(x) + [""] for x in SEED_WATCHLIST])
         elif title == ANALYSIS:
             write_tab(sh, ANALYSIS, [ANALYSIS_HEADER])
         elif title == HISTORY:
@@ -165,12 +167,21 @@ def read_params(sh) -> Params:
         },
         email=str(kv["email"]),
         types=types,
+        vpa_manual={
+            str(r[3]).strip(): v
+            for r in rows
+            if len(r) >= 6 and r[3] != "" and (v := _num(r[5])) and v > 0
+        },
     )
 
 
 def read_watchlist(sh) -> list[WatchItem]:
     rows = _get(sh, WATCH)[1:]
-    return [WatchItem(str(r[0]).strip(), str(r[1]).strip()) for r in rows if len(r) >= 2 and r[0] != ""]
+    return [
+        WatchItem(str(r[0]).strip(), str(r[1]).strip(), _num(r[2]) if len(r) > 2 else None)
+        for r in rows
+        if len(r) >= 2 and r[0] != ""
+    ]
 
 
 def write_analysis(sh, rows: list[AnalysisRow]) -> None:

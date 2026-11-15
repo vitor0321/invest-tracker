@@ -21,9 +21,11 @@ def main() -> None:
             f = provider.fetch(t, market)
             avg = sum(f.annual_dividends) / len(f.annual_dividends) if f.annual_dividends else None
             print(
-                f"{t:8} preço={f.price} div_médio_5a={avg} "
-                f"LPA={f.eps} VPA={f.bvps} payout={f.payout} fonte={f.source}"
+                f"{t:8} preço={f.price} div_médio_5a={avg} div_12m={f.dividend_12m} "
+                f"LPA={f.eps} VPA={f.bvps} payout_próprio={f.payout} "
+                f"moeda={f.currency}/{f.financial_currency} fonte={f.source}"
             )
+            print(f"         dividendos por ano (6 últimos anos completos): {f.annual_dividends}")
 
 
 if __name__ == "__main__":

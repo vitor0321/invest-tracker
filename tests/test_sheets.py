@@ -117,3 +117,14 @@ def test_analysis_and_history_roundtrip():
     append_signal_changes(sh, [SignalChange("ITUB4", "neutro", "oportunidade", "2026-11-16")])
     append_signal_changes(sh, [SignalChange("ITUB4", "oportunidade", "caro", "2026-11-17")])
     assert last_signals(sh) == {"ITUB4": "caro"}
+
+
+def test_manual_vpa_columns_roundtrip():
+    sh = make_sheet()
+    ensure_tabs(sh)
+    sh.tabs["Observação"].values[1] = ["TAEE11", "acao_br", 23.4]
+    sh.tabs["Parâmetros"].values[1] = sh.tabs["Parâmetros"].values[1][:5] + [158.0]
+    assert read_watchlist(sh)[0].vpa_manual == 23.4
+    assert read_watchlist(sh)[1].vpa_manual is None
+    p = read_params(sh)
+    assert p.vpa_manual == {"AGRO3": 158.0}

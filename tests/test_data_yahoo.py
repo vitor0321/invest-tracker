@@ -40,7 +40,7 @@ def test_provider_groups_dividends_by_year():
     assert f.price == 40.0
     assert f.eps == 2.0
     assert f.bvps == 10.0
-    assert f.payout == 0.5
+    assert f.payout == 0.0  # payout próprio: dividendos de 12 meses / LPA
     assert f.net_debt_ebitda == 2.0
     assert f.years_without_cut == 2
     assert f.source == "yahoo"
@@ -67,3 +67,37 @@ def test_provider_trailing_12m_dividends():
     f = YahooProvider(ticker_factory=Recent).fetch("MXRF11", "br")
     assert f.dividend_12m == 3.0
     assert f.months_paid_12m == 3
+
+
+def _recent_ticker(info_extra=None):
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    idx = pd.to_datetime([now - timedelta(days=30 * k) for k in (1, 4)]).tz_localize(None)
+
+    class T(FakeTicker):
+        @property
+        def dividends(self):
+            return pd.Series([1.0, 1.0], index=idx)
+
+        @property
+        def info(self):
+            return dict(FakeTicker.info.fget(self), **(info_extra or {}))
+
+    return T
+
+
+def test_payout_is_computed_from_own_dividends_not_yahoo():
+    f = YahooProvider(ticker_factory=_recent_ticker({"payoutRatio": 5.08})).fetch("VALE3", "br")
+    assert f.payout == 1.0 and f.eps == 2.0  # 2.0 de dividendos / LPA 2.0, ignora 5.08
+
+
+def test_payout_is_none_for_real_estate_sector():
+    f = YahooProvider(ticker_factory=_recent_ticker({"sector": "Real Estate"})).fetch("O", "us")
+    assert f.payout is None
+
+
+def test_eps_and_bvps_dropped_when_financial_currency_differs():
+    f = YahooProvider(ticker_factory=_recent_ticker({"currency": "BRL", "financialCurrency": "USD"})).fetch("VALE3", "br")
+    assert f.eps is None and f.bvps is None and f.price == 40.0
+    assert (f.currency, f.financial_currency) == ("BRL", "USD")

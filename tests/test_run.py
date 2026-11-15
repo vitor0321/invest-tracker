@@ -162,3 +162,30 @@ def test_i6_history_recorded_before_email():
 def test_i7_fetch_error_does_not_alert():
     assert detect_changes({"A": "oportunidade"}, {"A": "sem_dados"}, "d") == []
     assert detect_changes({"A": "sem_dados"}, {"A": "oportunidade"}, "d")[0].new == "oportunidade"
+
+
+def test_manual_vpa_fills_missing_bvps_for_fii():
+    from invest.sheets import Params as P
+
+    f = good("XPML11", price=92.0)
+    f.bvps, f.eps = None, None
+    f.dividend_12m, f.months_paid_12m = 11.04, 12
+    row = analyze("XPML11", "fii", f, PARAMS, held=False, now=NOW, manual_bvps=109.39)
+    assert row.score is not None and row.signal == "oportunidade"
+    assert analyze("XPML11", "fii", f, PARAMS, held=False, now=NOW).signal == "sem_dados"
+
+
+def test_run_once_passes_manual_vpa_from_watchlist_and_params():
+    from dataclasses import replace
+
+    class P2(Provider):
+        def fetch(self, ticker, market):
+            f = good(ticker, price=92.0)
+            f.bvps, f.eps = None, None
+            f.dividend_12m, f.months_paid_12m = 11.04, 12
+            return f
+
+    params = replace(PARAMS, vpa_manual={"HGLG11": 158.0})
+    rows, _ = run_once({}, [WatchItem("XPML11", "fii", 109.39), WatchItem("HGLG11", "fii")], params,
+                       P2(), {}, NOW, lambda *a: None)
+    assert {r.ticker: r.signal for r in rows} == {"XPML11": "oportunidade", "HGLG11": "oportunidade"}

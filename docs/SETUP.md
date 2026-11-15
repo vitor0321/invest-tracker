@@ -21,3 +21,5 @@
 3. Rode sem dry_run. Dali em diante roda sozinho, 18h de Brasília, em dias úteis.
 
 Para um papel novo na carteira, adicione uma linha com o tipo (`acao_br`, `fii`, `eua`, `etf`) em `Parâmetros`, colunas D e E. Sem isso ele aparece como "sem_tipo".
+
+Se o Yahoo não trouxer o valor patrimonial de um FII (ou de uma ação), preencha a coluna **VPA manual** na aba `Observação` (ou na coluna F de `Parâmetros`, para papéis da carteira). Sem isso, o papel fica sem nota.
