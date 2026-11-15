@@ -53,11 +53,12 @@ def check_quality(
     max_payout: float = 1.0,
     max_leverage: float = 3.0,
     min_years: int = 5,
+    check_leverage: bool = True,
 ) -> QualityResult:
     failures: list[str] = []
     if payout is None or payout > max_payout:
         failures.append("payout")
-    if net_debt_ebitda is None or net_debt_ebitda > max_leverage:
+    if check_leverage and (net_debt_ebitda is None or net_debt_ebitda > max_leverage):
         failures.append("divida")
     if years_without_cut < min_years:
         failures.append("anos_sem_corte")

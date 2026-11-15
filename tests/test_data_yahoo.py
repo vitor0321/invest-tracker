@@ -140,3 +140,12 @@ def test_provider_exposes_last_dividend_payment():
 
     f = YahooProvider(ticker_factory=Recent).fetch("VGIP11", "br")
     assert f.last_dividend == 0.67
+
+
+def test_provider_exposes_sector():
+    class Bank(FakeTicker):
+        @property
+        def info(self):
+            return dict(FakeTicker.info.fget(self), sector="Financial Services")
+
+    assert YahooProvider(ticker_factory=Bank).fetch("ITUB4", "br").sector == "Financial Services"

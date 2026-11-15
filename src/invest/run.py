@@ -83,7 +83,8 @@ def analyze(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool, now:
             gordon = gordon_price(f.annual_dividends[-1] * (1 + g), p.required_return, g)
         reference = reference_price([bazin, graham, gordon])
         quality = check_quality(f.payout, f.net_debt_ebitda, f.years_without_cut,
-                                p.max_payout, p.max_leverage)
+                                p.max_payout, p.max_leverage,
+                                check_leverage=f.sector != "Financial Services")  # banco não tem EBITDA
         regularity = len([d for d in divs if d > 0]) / 5
         dividend_cut = (len(f.annual_dividends) >= 2
                         and f.annual_dividends[-1] < f.annual_dividends[-2] * (1 - DIVIDEND_CUT_TOLERANCE))

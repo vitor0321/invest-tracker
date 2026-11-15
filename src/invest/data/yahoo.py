@@ -79,6 +79,7 @@ class YahooProvider:
             result.years_without_cut = _years_without_cut(result.annual_dividends)
             result.dividend_12m, result.months_paid_12m = _trailing_12m(t.dividends)
             result.last_dividend = _last_payment(t.dividends)
+            result.sector = info.get("sector")
             result.currency = info.get("currency")
             result.financial_currency = info.get("financialCurrency")
             if (result.currency and result.financial_currency

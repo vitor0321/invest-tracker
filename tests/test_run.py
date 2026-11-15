@@ -237,3 +237,12 @@ def test_fii_with_big_last_payment_drop_is_risk_not_opportunity():
     assert row.signal == "risco"
     f.last_dividend = 0.86
     assert analyze("VGIP11", "fii", f, PARAMS, held=True, now=NOW, manual_bvps=90.8).signal == "oportunidade"
+
+
+def test_bank_without_ebitda_is_not_failed_on_leverage():
+    f = good("ITUB4", price=20.0)
+    f.net_debt_ebitda = None
+    f.sector = "Financial Services"
+    assert analyze("ITUB4", "acao_br", f, PARAMS, held=False, now=NOW).signal == "oportunidade"
+    f.sector = "Utilities"
+    assert analyze("ITUB4", "acao_br", f, PARAMS, held=False, now=NOW).signal == "neutro"
