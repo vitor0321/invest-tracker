@@ -21,9 +21,10 @@ def gordon_price(
     required_return: float,
     growth: float,
     growth_cap: float = 0.06,
+    min_spread: float = 0.02,
 ) -> float | None:
     g = min(growth, growth_cap)
-    if g >= required_return:
+    if required_return - g < min_spread:
         return None
     return next_dividend / (required_return - g)
 

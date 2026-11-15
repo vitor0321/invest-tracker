@@ -83,3 +83,82 @@ def test_render_email_mentions_ticker_and_signal():
     subject, body = render_email([SignalChange("TAEE11", "neutro", "oportunidade", "2026-11-16")])
     assert "TAEE11" in subject or "TAEE11" in body
     assert "oportunidade" in body
+
+
+# --- correções da revisão final ---
+import pytest
+
+
+def rising_six_years():
+    import pandas as pd
+
+    class T:
+        dividends = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+                              index=pd.to_datetime([f"{y}-06-01" for y in range(2020, 2026)]))
+        info = {"currentPrice": 25.0, "trailingEps": 4.0, "bookValue": 30.0, "payoutRatio": 0.5,
+                "totalDebt": 100.0, "totalCash": 50.0, "ebitda": 100.0}
+
+    return T()
+
+
+def test_c1_real_dividend_series_can_reach_oportunidade():
+    from invest.data.yahoo import YahooProvider
+
+    f = YahooProvider(ticker_factory=lambda s: rising_six_years()).fetch("ITUB4", "br")
+    assert f.years_without_cut == 5
+    assert analyze("ITUB4", "acao_br", f, PARAMS, held=False, now=datetime.now(timezone.utc)).signal == "oportunidade"
+
+
+def test_i1_collected_at_comes_from_quote_time():
+    from invest.data.yahoo import YahooProvider
+
+    t = rising_six_years()
+    t.info = dict(t.info, regularMarketTime=int(datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp()))
+    f = YahooProvider(ticker_factory=lambda s: t).fetch("X", "br")
+    assert f.collected_at.year == 2026 and f.collected_at.month == 1
+    assert analyze("X", "acao_br", f, PARAMS, held=False, now=NOW).signal == "dado_velho"
+
+
+def test_i2_no_dividend_history_means_no_score():
+    f = good()
+    f.annual_dividends = []
+    row = analyze("AXIA3", "acao_br", f, PARAMS, held=True, now=NOW)
+    assert row.score is None and row.signal == "sem_dados"
+
+
+def test_i3_unknown_type_is_sem_tipo_and_case_insensitive():
+    w = [WatchItem("AAA", "FII-typo"), WatchItem("TAEE11", "ACAO_BR")]
+    rows, _ = run_once({}, w, PARAMS, Provider(), {}, NOW, lambda *a: None)
+    by = {r.ticker: r for r in rows}
+    assert by["AAA"].kind == "sem_tipo"
+    assert by["TAEE11"].kind == "acao_br"
+
+
+def test_i4_no_bazin_for_us_stocks():
+    row = analyze("JNJ", "eua", good("JNJ"), PARAMS, held=False, now=NOW)
+    assert row.bazin is None and row.graham is not None
+
+
+def test_i5_gordon_growth_is_capped_before_projection():
+    f = good()
+    f.annual_dividends = [0.1, 1.0]
+    row = analyze("ITUB4", "acao_br", f, PARAMS, held=False, now=NOW)
+    assert row.gordon == pytest.approx(26.5)
+
+
+def test_i5_gordon_spread_too_small_is_none():
+    from invest.valuation import gordon_price
+
+    assert gordon_price(1.0, 0.061, 0.05) is None
+
+
+def test_i6_history_recorded_before_email():
+    order = []
+    run_once({}, [WatchItem("TAEE11", "acao_br")], PARAMS, Provider(), {}, NOW,
+             send=lambda *a: order.append("send"), record=lambda c: order.append("record"))
+    assert order == ["record", "send"]
+
+
+def test_i7_fetch_error_does_not_alert():
+    assert detect_changes({"A": "oportunidade"}, {"A": "sem_dados"}, "d") == []
+    assert detect_changes({"A": "sem_dados"}, {"A": "oportunidade"}, "d")[0].new == "oportunidade"

@@ -18,12 +18,16 @@ from invest.valuation import (
 
 log = logging.getLogger("invest")
 SILENT_FIRST = {"neutro", "sem_dados"}
+VALID_KINDS = {"acao_br", "fii", "eua", "etf"}
+GROWTH_CAP = 0.06
 
 
 def detect_changes(previous: dict[str, str], current: dict[str, str], date: str) -> list[SignalChange]:
     out = []
     for ticker, new in current.items():
         old = previous.get(ticker)
+        if new == "sem_dados":  # falha de fonte não vira alerta nem histórico
+            continue
         if old is None:
             if new not in SILENT_FIRST:
                 out.append(SignalChange(ticker, "novo", new, date))
@@ -62,15 +66,18 @@ def analyze(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool, now:
         regularity = f.months_paid_12m / 12
         dividend_cut = False
     else:
-        bazin = bazin_ceiling(f.annual_dividends, p.target_dy)
+        if not f.annual_dividends:
+            return row("sem_dados")
+        divs = f.annual_dividends[-5:]
+        bazin = bazin_ceiling(divs, p.target_dy) if kind == "acao_br" else None
         graham = graham_fair_price(f.eps, f.bvps, p.graham_factor) if f.eps and f.bvps else None
         if f.annual_dividends and f.annual_dividends[-1] > 0:
-            g = _growth(f.annual_dividends)
+            g = min(_growth(divs), GROWTH_CAP)
             gordon = gordon_price(f.annual_dividends[-1] * (1 + g), p.required_return, g)
         reference = reference_price([bazin, graham, gordon])
         quality = check_quality(f.payout, f.net_debt_ebitda, f.years_without_cut,
                                 p.max_payout, p.max_leverage)
-        regularity = len([d for d in f.annual_dividends if d > 0]) / 5
+        regularity = len([d for d in divs if d > 0]) / 5
         dividend_cut = len(f.annual_dividends) >= 2 and f.annual_dividends[-1] < f.annual_dividends[-2]
 
     signal = classify(f.price, reference, quality, dividend_cut, f.payout, age, held,
@@ -82,13 +89,15 @@ def analyze(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool, now:
 
 def run_once(holdings: dict[str, float], watch: list[WatchItem], params: Params,
              provider: DataProvider, previous: dict[str, str], now: datetime,
-             send: Callable[[str, str, str], None]) -> tuple[list[AnalysisRow], list[SignalChange]]:
+             send: Callable[[str, str, str], None],
+             record: Callable[[list[SignalChange]], None] | None = None) -> tuple[list[AnalysisRow], list[SignalChange]]:
     targets: list[tuple[str, str | None, bool]] = [
         (t, params.types.get(t), True) for t in holdings
     ] + [(w.ticker, w.kind, False) for w in watch if w.ticker not in holdings]
     rows: list[AnalysisRow] = []
     for ticker, kind, held in targets:
-        if kind is None:
+        kind = kind.strip().lower() if kind else None
+        if kind not in VALID_KINDS:
             rows.append(AnalysisRow("sem_tipo", ticker, None, None, None, None, None, None,
                                     "sem_dados", "", now.date().isoformat()))
             continue
@@ -102,6 +111,8 @@ def run_once(holdings: dict[str, float], watch: list[WatchItem], params: Params,
     current = {r.ticker: r.signal for r in rows}
     changes = detect_changes(previous, current, now.date().isoformat())
     if changes:
+        if record:
+            record(changes)
         subject, body = alerts.render_email(changes, rows)
         send(subject, body, params.email)
     return rows, changes
@@ -124,11 +135,13 @@ def main() -> int:
         else:
             alerts.send_email(subject, body, to, user, os.environ["SMTP_APP_PASSWORD"])
 
-    rows, changes = run_once(sheets.read_holdings(sh), sheets.read_watchlist(sh), params,
-                             YahooProvider(), sheets.last_signals(sh), now, send)
+    def record(changes):
+        if not args.dry_run:
+            sheets.append_signal_changes(sh, changes)
+
+    rows, _ = run_once(sheets.read_holdings(sh), sheets.read_watchlist(sh), params,
+                       YahooProvider(), sheets.last_signals(sh), now, send, record)
     sheets.write_analysis(sh, rows)
-    if not args.dry_run:
-        sheets.append_signal_changes(sh, changes)
     return 0
 
 

@@ -13,13 +13,13 @@ def _default_factory(symbol: str):
 
 
 def _annual_totals(dividends) -> list[float]:
-    """Soma por ano civil, só anos completos (exclui o ano corrente), últimos 5."""
+    """Soma por ano civil, só anos completos, últimos 6 (5 comparações ano a ano)."""
     by_year: dict[int, float] = {}
     for ts, value in dividends.items():
         by_year[ts.year] = by_year.get(ts.year, 0.0) + float(value)
     current = datetime.now(timezone.utc).year
     years = sorted(y for y in by_year if y < current)
-    return [round(by_year[y], 6) for y in years][-5:]
+    return [round(by_year[y], 6) for y in years][-6:]
 
 
 
@@ -53,6 +53,9 @@ class YahooProvider:
         try:
             t = self._factory(normalize_ticker(ticker, market))
             info = t.info or {}
+            qt = info.get("regularMarketTime")
+            if isinstance(qt, (int, float)):
+                result.collected_at = datetime.fromtimestamp(qt, tz=timezone.utc)
             result.price = info.get("currentPrice") or info.get("regularMarketPrice")
             result.eps = info.get("trailingEps")
             result.bvps = info.get("bookValue")

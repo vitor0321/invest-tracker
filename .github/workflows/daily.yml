@@ -8,6 +8,7 @@ on:
         description: "Não enviar e-mail nem gravar histórico"
         type: boolean
         default: false
+concurrency: daily
 jobs:
   run:
     runs-on: ubuntu-latest
