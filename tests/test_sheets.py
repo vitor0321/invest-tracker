@@ -217,3 +217,13 @@ def test_format_analysis_applies_header_filter_rules_and_resets_old_rules():
              for q in reqs if "addConditionalFormatRule" in q
              and q["addConditionalFormatRule"]["rule"]["booleanRule"]["condition"]["type"] == "TEXT_EQ"]
     assert set(texts) == {"oportunidade", "caro", "risco", "dado_velho", "sem_dados"}
+
+
+def test_analysis_tab_has_reason_column_after_signal():
+    sh = make_sheet()
+    ensure_tabs(sh)
+    write_analysis(sh, [AnalysisRow("acao_br", "ITUB4", 40.0, 50.0, 21.2, None, 20.0, 60, "neutro",
+                                    "yahoo", "d", notes="payout 134%")])
+    header, row = sh.tabs["Análise"].values[0], sh.tabs["Análise"].values[1]
+    assert header[10:13] == ["Sinal", "Motivo", "Fonte"]
+    assert row[11] == "payout 134%" and row[12] == "yahoo"

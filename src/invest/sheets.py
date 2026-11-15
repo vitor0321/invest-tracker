@@ -84,6 +84,7 @@ class AnalysisRow:
     collected_at: str
     reference: float | None = None
     held: bool = False
+    notes: str = ""
 
 
 @dataclass
@@ -151,7 +152,7 @@ def ensure_tabs(sh) -> None:
 
 
 ANALYSIS_HEADER = ["Tipo", "Papel", "Carteira", "Preço", "Bazin", "Graham", "Gordon", "Referência",
-                   "Folga %", "Nota", "Sinal", "Fonte", "Coletado em"]
+                   "Folga %", "Nota", "Sinal", "Motivo", "Fonte", "Coletado em"]
 
 SIGNAL_ORDER = ["oportunidade", "caro", "risco", "dado_velho", "neutro", "sem_dados"]
 # cores (fundo, texto) por sinal, em RGB 0-1
@@ -162,7 +163,7 @@ SIGNAL_COLORS = {
     "dado_velho": ((0.85, 0.85, 0.85), (0.35, 0.35, 0.35)),
     "sem_dados": ((0.93, 0.93, 0.93), (0.45, 0.45, 0.45)),
 }
-COLUMN_WIDTHS = [70, 85, 75, 85, 85, 85, 85, 100, 80, 60, 115, 75, 105]
+COLUMN_WIDTHS = [70, 85, 75, 85, 85, 85, 85, 100, 80, 60, 115, 340, 75, 105]
 
 
 def _sort_key(r: AnalysisRow):
@@ -281,7 +282,7 @@ def read_watchlist(sh) -> list[WatchItem]:
 def write_analysis(sh, rows: list[AnalysisRow]) -> None:
     body = [
         [r.kind, r.ticker, "Sim" if r.held else "", r.price, r.bazin, r.graham, r.gordon, r.reference,
-         r.slack_pct, r.score, r.signal, r.source, r.collected_at]
+         r.slack_pct, r.score, r.signal, r.notes, r.source, r.collected_at]
         for r in sorted(rows, key=_sort_key)
     ]
     write_tab(sh, ANALYSIS, [ANALYSIS_HEADER] + [["" if v is None else v for v in b] for b in body])

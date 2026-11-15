@@ -269,3 +269,32 @@ def test_run_once_passes_html_to_send():
     run_once({}, [WatchItem("TAEE11", "acao_br")], PARAMS, Provider(), {}, NOW,
              lambda s, b, to, html=None: got.append(html))
     assert got and "<table" in got[0]
+
+
+def test_notes_explain_quality_failures_and_reference_method():
+    f = good("ITUB4", price=25.0)
+    f.payout, f.net_debt_ebitda, f.years_without_cut = 1.34, None, 2
+    note = analyze("ITUB4", "acao_br", f, PARAMS, held=False, now=NOW).notes
+    assert "payout 134%" in note
+    assert "dívida/EBITDA sem dado" in note
+    assert "2 ano(s) sem corte" in note
+    assert "Referência: Gordon" in note
+
+
+def test_notes_flag_dividend_cut_and_leverage_value():
+    f = good("BBAS3", price=25.0)
+    f.annual_dividends = [3.0, 3.0, 3.0, 3.0, 1.0]
+    f.net_debt_ebitda = 4.5
+    note = analyze("BBAS3", "acao_br", f, PARAMS, held=True, now=NOW).notes
+    assert "dividendo caiu mais de 20%" in note
+    assert "dívida/EBITDA 4,5" in note
+
+
+def test_notes_for_clean_fii_and_failing_fii():
+    f = good("MXRF11", price=10.0)
+    f.bvps, f.eps = 10.0, None
+    f.dividend_12m, f.months_paid_12m, f.last_dividend = 1.2, 12, 0.10
+    assert analyze("MXRF11", "fii", f, PARAMS, held=False, now=NOW).notes == "Referência: VPA × 1,10"
+    f.price, f.dividend_12m = 12.0, 0.5
+    note = analyze("MXRF11", "fii", f, PARAMS, held=False, now=NOW).notes
+    assert "P/VP 1,20" in note and "DY 4,2%" in note

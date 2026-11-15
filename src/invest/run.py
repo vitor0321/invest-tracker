@@ -43,13 +43,57 @@ def _growth(annual: list[float]) -> float:
     return (annual[-1] / annual[0]) ** (1 / (len(annual) - 1)) - 1
 
 
+def _pt(x: float, digits: int = 1) -> str:
+    return f"{x:.{digits}f}".replace(".", ",")
+
+
+def _notes(kind: str, f: Fundamentals, p: Params, quality: QualityResult, dividend_cut: bool,
+           pvp: float | None, dy: float | None, age: int, methods: dict[str, float | None],
+           reference: float | None) -> str:
+    fails: list[str] = []
+    for code in quality.failures:
+        if code == "payout":
+            fails.append("payout sem dado" if f.payout is None else f"payout {f.payout * 100:.0f}%")
+        elif code == "divida":
+            fails.append("dívida/EBITDA sem dado" if f.net_debt_ebitda is None
+                         else f"dívida/EBITDA {_pt(f.net_debt_ebitda)}")
+        elif code == "anos_sem_corte":
+            fails.append(f"{f.years_without_cut} ano(s) sem corte")
+        elif code == "pvp":
+            fails.append("sem VPA (preencha o VPA manual)" if pvp is None else f"P/VP {_pt(pvp, 2)}")
+        elif code == "dy":
+            fails.append("DY sem dado" if dy is None else f"DY {_pt(dy * 100)}%")
+        elif code == "regularidade":
+            fails.append(f"só {f.months_paid_12m} de 12 meses com rendimento")
+        elif code == "queda_rendimento":
+            fails.append("último rendimento caiu mais de 20%")
+        else:
+            fails.append(code)
+    if dividend_cut and "queda_rendimento" not in quality.failures:
+        fails.append("dividendo caiu mais de 20% no último ano")
+    parts = []
+    if age > p.max_age_days:
+        parts.append(f"cotação de {age} dias atrás")
+    if fails:
+        parts.append("Reprovou: " + "; ".join(fails))
+    if reference is not None:
+        if kind == "fii":
+            parts.append("Referência: VPA × 1,10")
+        else:
+            name = next((n for n, v in methods.items() if v is not None and v == reference), None)
+            if name:
+                parts.append(f"Referência: {name}")
+    return " | ".join(parts)
+
+
 def analyze(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool, now: datetime,
             manual_bvps: float | None = None) -> AnalysisRow:
     date = f.collected_at.date().isoformat()
 
-    def row(signal, bazin=None, graham=None, gordon=None, slack=None, score=None, reference=None):
+    def row(signal, bazin=None, graham=None, gordon=None, slack=None, score=None, reference=None,
+            notes=""):
         return AnalysisRow(kind, ticker, f.price, bazin, graham, gordon, slack, score, signal,
-                           f.source, date, reference, held)
+                           f.source, date, reference, held, notes)
 
     age = (now - f.collected_at).days
     bvps = f.bvps if f.bvps is not None else manual_bvps
@@ -59,6 +103,7 @@ def analyze(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool, now:
         return row("dado_velho" if age > p.max_age_days else "neutro")
 
     bazin = graham = gordon = None
+    pvp = dy = None
     if kind == "fii":
         quality = QualityResult(False, ["sem_dados"])
         reference = None
@@ -93,7 +138,9 @@ def analyze(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool, now:
                       p.max_age_days, p.max_payout)
     score = compute_score(f.price, reference, quality.passed, regularity, p.weights)
     slack = round((reference - f.price) / reference * 100, 1) if reference else None
-    return row(signal, bazin, graham, gordon, slack, score, reference)
+    notes = _notes(kind, f, p, quality, dividend_cut, pvp, dy, age,
+                   {"Bazin": bazin, "Graham": graham, "Gordon": gordon}, reference)
+    return row(signal, bazin, graham, gordon, slack, score, reference, notes)
 
 
 def run_once(holdings: dict[str, float], watch: list[WatchItem], params: Params,
