@@ -22,6 +22,7 @@ class Fundamentals:
     years_without_cut: int = 0
     dividend_12m: float | None = None
     months_paid_12m: int = 0
+    last_dividend: float | None = None
     currency: str | None = None
     financial_currency: str | None = None
     source: str = ""

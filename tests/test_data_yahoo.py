@@ -125,3 +125,18 @@ def test_small_dividend_dips_do_not_break_the_no_cut_streak():
 
     assert _years_without_cut([1.0, 0.85, 0.9, 1.0, 1.1, 1.2]) == 5
     assert _years_without_cut([1.0, 1.0, 0.5, 1.0]) == 1
+
+
+def test_provider_exposes_last_dividend_payment():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    idx = pd.to_datetime([now - timedelta(days=30 * k) for k in (1, 2, 3)]).tz_localize(None)
+
+    class Recent(FakeTicker):
+        @property
+        def dividends(self):
+            return pd.Series([0.67, 1.05, 1.05], index=idx)  # 30 dias atrás é o pagamento mais recente
+
+    f = YahooProvider(ticker_factory=Recent).fetch("VGIP11", "br")
+    assert f.last_dividend == 0.67

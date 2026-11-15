@@ -227,3 +227,13 @@ def test_email_shows_reference_for_fii():
     row = AR("fii", "MXRF11", 8.75, None, None, None, 19.9, 60, "oportunidade", "yahoo", "d", reference=10.92)
     _, body = render_email([SignalChange("MXRF11", "novo", "oportunidade", "d")], [row])
     assert "10.92" in body
+
+
+def test_fii_with_big_last_payment_drop_is_risk_not_opportunity():
+    f = good("VGIP11", price=64.95)
+    f.bvps, f.eps = None, None
+    f.dividend_12m, f.months_paid_12m, f.last_dividend = 10.29, 12, 0.67
+    row = analyze("VGIP11", "fii", f, PARAMS, held=True, now=NOW, manual_bvps=90.8)
+    assert row.signal == "risco"
+    f.last_dividend = 0.86
+    assert analyze("VGIP11", "fii", f, PARAMS, held=True, now=NOW, manual_bvps=90.8).signal == "oportunidade"

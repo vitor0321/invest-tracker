@@ -69,6 +69,8 @@ class FiiMetrics:
     pvp: float | None
     dy_12m: float | None
     months_paid_12m: int
+    last_dividend: float | None = None
+    avg_dividend: float | None = None
 
 
 def fii_quality(
@@ -76,6 +78,7 @@ def fii_quality(
     max_pvp: float = 1.10,
     min_dy: float = 0.08,
     min_months: int = 11,
+    max_drop: float = DIVIDEND_CUT_TOLERANCE,
 ) -> QualityResult:
     failures: list[str] = []
     if m.pvp is None or m.pvp > max_pvp:
@@ -84,4 +87,7 @@ def fii_quality(
         failures.append("dy")
     if m.months_paid_12m < min_months:
         failures.append("regularidade")
+    if (m.last_dividend is not None and m.avg_dividend
+            and m.last_dividend < m.avg_dividend * (1 - max_drop)):
+        failures.append("queda_rendimento")
     return _result(failures)

@@ -42,3 +42,10 @@ def test_quality():
 def test_fii_quality():
     assert fii_quality(FiiMetrics(0.95, 0.09, 12)).passed is True
     assert fii_quality(FiiMetrics(1.3, 0.09, 12)).failures == ["pvp"]
+
+
+def test_fii_quality_flags_last_payment_drop_over_20_percent():
+    drop = fii_quality(FiiMetrics(0.8, 0.12, 12, last_dividend=0.67, avg_dividend=0.86))
+    assert drop.passed is False and drop.failures == ["queda_rendimento"]
+    assert fii_quality(FiiMetrics(0.8, 0.12, 12, last_dividend=0.80, avg_dividend=0.86)).passed is True
+    assert fii_quality(FiiMetrics(0.8, 0.12, 12)).passed is True  # sem dado do último rendimento: não pune

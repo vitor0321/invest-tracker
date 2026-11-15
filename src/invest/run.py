@@ -65,10 +65,12 @@ def analyze(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool, now:
         if bvps:
             pvp = f.price / bvps
             dy = (f.dividend_12m / f.price) if f.dividend_12m is not None else None
-            quality = fii_quality(FiiMetrics(pvp, dy, f.months_paid_12m))
+            avg = (f.dividend_12m / f.months_paid_12m
+                   if f.dividend_12m and f.months_paid_12m else None)
+            quality = fii_quality(FiiMetrics(pvp, dy, f.months_paid_12m, f.last_dividend, avg))
             reference = bvps * 1.10
         regularity = f.months_paid_12m / 12
-        dividend_cut = False
+        dividend_cut = "queda_rendimento" in quality.failures
     else:
         if not f.annual_dividends:
             return row("sem_dados")
