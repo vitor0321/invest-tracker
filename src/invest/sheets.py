@@ -11,8 +11,11 @@ ANALYSIS, WATCH, PARAMS, HISTORY = "Análise", "Observação", "Parâmetros", "H
 OWN_TABS = (ANALYSIS, WATCH, PARAMS, HISTORY)
 
 DEFAULT_PARAMS = [
-    ("dy_alvo", 0.06),
-    ("retorno_exigido", 0.10),
+    ("ntnb_real", 0.074),          # juro real do Tesouro IPCA+ longo; atualizar todo mês
+    ("inflacao_esperada", 0.04),   # inflação de longo prazo
+    ("premio_risco", 0.02),        # prêmio exigido da bolsa sobre a renda fixa
+    ("retorno_exigido", ""),       # vazio = calculado dos juros; número = sobrescreve
+    ("dy_alvo", ""),               # vazio = retorno exigido - inflação; número = sobrescreve
     ("graham_fator", 22.5),
     ("payout_max", 1.0),
     ("divida_ebitda_max", 3.0),
@@ -154,9 +157,17 @@ def read_params(sh) -> Params:
     rows = _get(sh, PARAMS)[1:]
     kv = {str(r[0]): r[1] for r in rows if len(r) >= 2 and r[0] != ""}
     types = {str(r[3]).strip(): str(r[4]).strip() for r in rows if len(r) >= 5 and r[3] != ""}
+    def rate(key: str, default: float) -> float:
+        value = _num(kv.get(key))
+        return default if value is None else value
+
+    ntnb_real, inflation, premium = rate("ntnb_real", 0.074), rate("inflacao_esperada", 0.04), rate("premio_risco", 0.02)
+    derived_return = (1 + ntnb_real) * (1 + inflation) - 1 + premium
+    required_return = _num(kv.get("retorno_exigido")) or derived_return
+    target_dy = _num(kv.get("dy_alvo")) or (required_return - inflation)
     return Params(
-        target_dy=float(kv["dy_alvo"]),
-        required_return=float(kv["retorno_exigido"]),
+        target_dy=target_dy,
+        required_return=required_return,
         graham_factor=float(kv["graham_fator"]),
         max_payout=float(kv["payout_max"]),
         max_leverage=float(kv["divida_ebitda_max"]),

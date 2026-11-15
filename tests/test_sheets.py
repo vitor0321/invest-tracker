@@ -84,8 +84,8 @@ def test_defaults_after_ensure():
     sh = make_sheet()
     ensure_tabs(sh)
     p = read_params(sh)
-    assert p.target_dy == 0.06
-    assert p.required_return == 0.10
+    assert p.required_return == pytest.approx(0.1370, abs=1e-4)  # NTN-B 7,4% real + 4% inflação + 2% prêmio
+    assert p.target_dy == pytest.approx(0.0970, abs=1e-4)  # retorno exigido - inflação
     assert p.graham_factor == 22.5
     assert p.max_payout == 1.0
     assert p.max_leverage == 3.0
@@ -137,3 +137,39 @@ def test_seed_watchlist_uses_current_codes_and_etf_type():
     assert "CPLE6" not in items and items["CPLE3"] == "acao_br"
     assert items["SCHD"] == "etf"
     assert "Referência" in sh.tabs["Análise"].values[0]
+
+
+def _set_param(sh, key, value):
+    for row in sh.tabs["Parâmetros"].values[1:]:
+        if row[0] == key:
+            row[1] = value
+            return
+    sh.tabs["Parâmetros"].values.append([key, value])
+
+
+def test_rates_drive_required_return_and_target_dy():
+    sh = make_sheet()
+    ensure_tabs(sh)
+    _set_param(sh, "ntnb_real", 0.06)
+    _set_param(sh, "inflacao_esperada", 0.0)
+    _set_param(sh, "premio_risco", 0.02)
+    p = read_params(sh)
+    assert p.required_return == pytest.approx(0.08)
+    assert p.target_dy == pytest.approx(0.08)
+
+
+def test_explicit_dy_alvo_and_retorno_exigido_override_the_rates():
+    sh = make_sheet()
+    ensure_tabs(sh)
+    _set_param(sh, "dy_alvo", 0.06)
+    _set_param(sh, "retorno_exigido", 0.10)
+    p = read_params(sh)
+    assert p.target_dy == 0.06 and p.required_return == 0.10
+
+
+def test_old_sheet_without_rate_params_still_reads():
+    sh = make_sheet()
+    ensure_tabs(sh)
+    sh.tabs["Parâmetros"].values = [r for r in sh.tabs["Parâmetros"].values
+                                    if r[0] not in ("ntnb_real", "inflacao_esperada", "premio_risco")]
+    assert read_params(sh).required_return == pytest.approx(0.1370, abs=1e-4)
