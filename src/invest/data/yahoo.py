@@ -1,0 +1,57 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Callable
+
+from invest.data.base import Fundamentals, Market, log, normalize_ticker
+
+
+def _default_factory(symbol: str):
+    import yfinance as yf
+
+    return yf.Ticker(symbol)
+
+
+def _annual_totals(dividends) -> list[float]:
+    """Soma por ano civil, só anos completos (exclui o ano corrente), últimos 5."""
+    by_year: dict[int, float] = {}
+    for ts, value in dividends.items():
+        by_year[ts.year] = by_year.get(ts.year, 0.0) + float(value)
+    current = datetime.now(timezone.utc).year
+    years = sorted(y for y in by_year if y < current)
+    return [round(by_year[y], 6) for y in years][-5:]
+
+
+
+def _years_without_cut(annual: list[float]) -> int:
+    count = 0
+    for prev, cur in zip(reversed(annual[:-1]), reversed(annual[1:])):
+        if cur >= prev:
+            count += 1
+        else:
+            break
+    return count
+
+
+class YahooProvider:
+    def __init__(self, ticker_factory: Callable = _default_factory):
+        self._factory = ticker_factory
+
+    def fetch(self, ticker: str, market: Market) -> Fundamentals:
+        result = Fundamentals(ticker=ticker, source="yahoo")
+        try:
+            t = self._factory(normalize_ticker(ticker, market))
+            info = t.info or {}
+            result.price = info.get("currentPrice") or info.get("regularMarketPrice")
+            result.eps = info.get("trailingEps")
+            result.bvps = info.get("bookValue")
+            result.payout = info.get("payoutRatio")
+            debt, cash, ebitda = info.get("totalDebt"), info.get("totalCash"), info.get("ebitda")
+            if debt is not None and cash is not None and ebitda:
+                result.net_debt_ebitda = (debt - cash) / ebitda
+            result.annual_dividends = _annual_totals(t.dividends)
+            result.years_without_cut = _years_without_cut(result.annual_dividends)
+        except Exception as exc:  # fonte instável: nunca derruba a rodada
+            log.warning("yahoo falhou para %s: %s", ticker, exc)
+            return Fundamentals(ticker=ticker, source="yahoo")
+        return result

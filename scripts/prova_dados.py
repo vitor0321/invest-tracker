@@ -1,0 +1,30 @@
+"""Prova dos dados: imprime o que a fonte devolve para 5 papéis de cada tipo.
+
+Rode na sua máquina: python scripts/prova_dados.py
+Compare com Status Invest ou Investidor10.
+"""
+from invest.data.yahoo import YahooProvider
+
+SAMPLE = {
+    "br": ["ITUB4", "TAEE11", "BBAS3", "EGIE3", "VALE3"],
+    "fii": ["MXRF11", "XPML11", "KNRI11", "HGLG11", "BTLG11"],
+    "us": ["JNJ", "KO", "PG", "AAPL", "O"],
+}
+
+
+def main() -> None:
+    provider = YahooProvider()
+    for kind, tickers in SAMPLE.items():
+        market = "us" if kind == "us" else "br"
+        print(f"\n== {kind} ==")
+        for t in tickers:
+            f = provider.fetch(t, market)
+            avg = sum(f.annual_dividends) / len(f.annual_dividends) if f.annual_dividends else None
+            print(
+                f"{t:8} preço={f.price} div_médio_5a={avg} "
+                f"LPA={f.eps} VPA={f.bvps} payout={f.payout} fonte={f.source}"
+            )
+
+
+if __name__ == "__main__":
+    main()
