@@ -51,3 +51,19 @@ def test_provider_failure_returns_empty_fundamentals():
     assert f.price is None
     assert f.annual_dividends == []
     assert f.eps is None
+
+
+def test_provider_trailing_12m_dividends():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    idx = pd.to_datetime([now - timedelta(days=30 * k) for k in (1, 2, 3, 20)])
+
+    class Recent(FakeTicker):
+        @property
+        def dividends(self):
+            return pd.Series([1.0, 1.0, 1.0, 5.0], index=idx.tz_localize(None))
+
+    f = YahooProvider(ticker_factory=Recent).fetch("MXRF11", "br")
+    assert f.dividend_12m == 3.0
+    assert f.months_paid_12m == 3

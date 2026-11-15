@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from invest.data.base import Fundamentals, Market, log, normalize_ticker
@@ -33,6 +33,17 @@ def _years_without_cut(annual: list[float]) -> int:
     return count
 
 
+def _trailing_12m(dividends) -> tuple[float, int]:
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=365)
+    total, months = 0.0, set()
+    for ts, value in dividends.items():
+        naive = ts.tz_localize(None) if getattr(ts, "tzinfo", None) else ts
+        if naive >= cutoff:
+            total += float(value)
+            months.add((naive.year, naive.month))
+    return total, len(months)
+
+
 class YahooProvider:
     def __init__(self, ticker_factory: Callable = _default_factory):
         self._factory = ticker_factory
@@ -51,6 +62,7 @@ class YahooProvider:
                 result.net_debt_ebitda = (debt - cash) / ebitda
             result.annual_dividends = _annual_totals(t.dividends)
             result.years_without_cut = _years_without_cut(result.annual_dividends)
+            result.dividend_12m, result.months_paid_12m = _trailing_12m(t.dividends)
         except Exception as exc:  # fonte instável: nunca derruba a rodada
             log.warning("yahoo falhou para %s: %s", ticker, exc)
             return Fundamentals(ticker=ticker, source="yahoo")

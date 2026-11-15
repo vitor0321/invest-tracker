@@ -20,6 +20,8 @@ class Fundamentals:
     payout: float | None = None
     net_debt_ebitda: float | None = None
     years_without_cut: int = 0
+    dividend_12m: float | None = None
+    months_paid_12m: int = 0
     source: str = ""
     collected_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
