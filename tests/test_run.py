@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from invest.alerts import render_email
 from invest.data.base import Fundamentals
 from invest.run import analyze, detect_changes, run_once
+from invest.sheets import AnalysisRow as AR
 from invest.sheets import Params, SignalChange, WatchItem
 
 PARAMS = Params(0.06, 0.10, 22.5, 1.0, 3.0, 10,
@@ -63,7 +64,7 @@ def test_run_once_sends_email_only_on_change_and_survives_failure():
     sent, history = [], {}
     items = [WatchItem("TAEE11", "acao_br"), WatchItem("BAD3", "acao_br")]
     kwargs = dict(holdings={}, watch=items, params=PARAMS, provider=Provider(bad={"BAD3"}),
-                  previous=history, now=NOW, send=lambda s, b, to: sent.append((s, b, to)))
+                  previous=history, now=NOW, send=lambda s, b, to, html=None: sent.append((s, b, to)))
     rows, changes = run_once(**kwargs)
     assert {r.ticker: r.signal for r in rows} == {"TAEE11": "oportunidade", "BAD3": "sem_dados"}
     assert len(changes) == 1 and len(sent) == 1 and sent[0][2] == "x@y.com"
@@ -246,3 +247,25 @@ def test_bank_without_ebitda_is_not_failed_on_leverage():
     assert analyze("ITUB4", "acao_br", f, PARAMS, held=False, now=NOW).signal == "oportunidade"
     f.sector = "Utilities"
     assert analyze("ITUB4", "acao_br", f, PARAMS, held=False, now=NOW).signal == "neutro"
+
+
+def test_render_email_html_is_scannable():
+    from invest.alerts import render_email_html
+
+    rows = [AR("fii", "VGIP11", 64.95, None, None, None, 34.9, 70, "risco", "yahoo", "d", reference=99.88, held=True),
+            AR("acao_br", "TAEE11", 40.0, 50.0, None, None, 20.0, 80, "oportunidade", "yahoo", "d", reference=50.0)]
+    changes = [SignalChange("TAEE11", "neutro", "oportunidade", "2026-11-15"),
+               SignalChange("VGIP11", "oportunidade", "risco", "2026-11-15")]
+    html = render_email_html(changes, rows)
+    assert "VGIP11" in html and "TAEE11" in html
+    assert "64,95" in html and "99,88" in html          # formato brasileiro
+    assert html.index("VGIP11") < html.index("TAEE11")  # risco vem antes de oportunidade
+    assert "carteira" in html.lower()                    # marca o que você já tem
+    assert "não é uma ordem" in html.lower() or "não uma ordem" in html.lower()
+
+
+def test_run_once_passes_html_to_send():
+    got = []
+    run_once({}, [WatchItem("TAEE11", "acao_br")], PARAMS, Provider(), {}, NOW,
+             lambda s, b, to, html=None: got.append(html))
+    assert got and "<table" in got[0]

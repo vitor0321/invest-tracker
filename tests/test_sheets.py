@@ -16,6 +16,8 @@ from invest.sheets import (
 
 
 class FakeWS:
+    id = 7
+
     def __init__(self, title, values=None):
         self.title = title
         self.values = values or []
@@ -57,6 +59,16 @@ class FakeSheet:
 
     def worksheets(self):
         return list(self.tabs.values())
+
+    existing_rules = 0
+    batches: list = []
+
+    def fetch_sheet_metadata(self, params=None):
+        return {"sheets": [{"properties": {"sheetId": 7, "title": "Análise"},
+                            "conditionalFormats": [{}] * self.existing_rules}]}
+
+    def batch_update(self, body):
+        self.batches = getattr(self, "batches", []) + [body]
 
 
 def make_sheet():
@@ -173,3 +185,35 @@ def test_old_sheet_without_rate_params_still_reads():
     sh.tabs["Parâmetros"].values = [r for r in sh.tabs["Parâmetros"].values
                                     if r[0] not in ("ntnb_real", "inflacao_esperada", "premio_risco")]
     assert read_params(sh).required_return == pytest.approx(0.1370, abs=1e-4)
+
+
+def test_analysis_sorted_by_actionability_and_marks_holdings():
+    sh = make_sheet()
+    ensure_tabs(sh)
+
+    def r(t, sig, score, held=False):
+        return AnalysisRow("acao_br", t, 10.0, None, None, None, 5.0, score, sig, "yahoo", "d", held=held)
+
+    write_analysis(sh, [r("N1", "neutro", 90), r("R1", "risco", 50), r("C1", "caro", 40, True),
+                        r("O1", "oportunidade", 60), r("O2", "oportunidade", 80)])
+    values = sh.tabs["Análise"].values
+    assert [row[1] for row in values[1:]] == ["O2", "O1", "C1", "R1", "N1"]
+    assert values[0][2] == "Carteira"
+    assert [row[2] for row in values[1:]] == ["", "", "Sim", "", ""]
+
+
+def test_format_analysis_applies_header_filter_rules_and_resets_old_rules():
+    from invest.sheets import format_analysis
+
+    sh = make_sheet()
+    ensure_tabs(sh)
+    sh.existing_rules = 3
+    format_analysis(sh)
+    reqs = sh.batches[0]["requests"]
+    kinds = [next(iter(q)) for q in reqs]
+    assert kinds[:3] == ["deleteConditionalFormatRule"] * 3      # idempotente: limpa regras antigas
+    assert "setBasicFilter" in kinds and "updateSheetProperties" in kinds
+    texts = [q["addConditionalFormatRule"]["rule"]["booleanRule"]["condition"]["values"][0]["userEnteredValue"]
+             for q in reqs if "addConditionalFormatRule" in q
+             and q["addConditionalFormatRule"]["rule"]["booleanRule"]["condition"]["type"] == "TEXT_EQ"]
+    assert set(texts) == {"oportunidade", "caro", "risco", "dado_velho", "sem_dados"}

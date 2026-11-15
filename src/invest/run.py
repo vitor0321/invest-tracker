@@ -49,7 +49,7 @@ def analyze(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool, now:
 
     def row(signal, bazin=None, graham=None, gordon=None, slack=None, score=None, reference=None):
         return AnalysisRow(kind, ticker, f.price, bazin, graham, gordon, slack, score, signal,
-                           f.source, date, reference)
+                           f.source, date, reference, held)
 
     age = (now - f.collected_at).days
     bvps = f.bvps if f.bvps is not None else manual_bvps
@@ -98,7 +98,7 @@ def analyze(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool, now:
 
 def run_once(holdings: dict[str, float], watch: list[WatchItem], params: Params,
              provider: DataProvider, previous: dict[str, str], now: datetime,
-             send: Callable[[str, str, str], None],
+             send: Callable[..., None],
              record: Callable[[list[SignalChange]], None] | None = None) -> tuple[list[AnalysisRow], list[SignalChange]]:
     targets: list[tuple[str, str | None, bool, float | None]] = [
         (t, params.types.get(t), True, params.vpa_manual.get(t)) for t in holdings
@@ -124,7 +124,7 @@ def run_once(holdings: dict[str, float], watch: list[WatchItem], params: Params,
         if record:
             record(changes)
         subject, body = alerts.render_email(changes, rows)
-        send(subject, body, params.email)
+        send(subject, body, params.email, alerts.render_email_html(changes, rows))
     return rows, changes
 
 
@@ -139,11 +139,11 @@ def main() -> int:
     now = datetime.now(timezone.utc)
     user = os.environ.get("SMTP_USER", "vitorwalcker.dev@gmail.com")
 
-    def send(subject: str, body: str, to: str) -> None:
+    def send(subject: str, body: str, to: str, html: str | None = None) -> None:
         if args.dry_run:
             print(subject, body, sep="\n")
         else:
-            alerts.send_email(subject, body, to, user, os.environ["SMTP_APP_PASSWORD"])
+            alerts.send_email(subject, body, to, user, os.environ["SMTP_APP_PASSWORD"], html)
 
     def record(changes):
         if not args.dry_run:
@@ -152,6 +152,10 @@ def main() -> int:
     rows, _ = run_once(sheets.read_holdings(sh), sheets.read_watchlist(sh), params,
                        YahooProvider(), sheets.last_signals(sh), now, send, record)
     sheets.write_analysis(sh, rows)
+    try:
+        sheets.format_analysis(sh)
+    except Exception as exc:  # visual nunca derruba a rodada
+        log.warning("formatação falhou: %s", exc)
     return 0
 
 

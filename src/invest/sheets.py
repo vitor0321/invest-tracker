@@ -83,6 +83,7 @@ class AnalysisRow:
     source: str
     collected_at: str
     reference: float | None = None
+    held: bool = False
 
 
 @dataclass
@@ -149,8 +150,89 @@ def ensure_tabs(sh) -> None:
             write_tab(sh, HISTORY, [["Data", "Papel", "De", "Para"]])
 
 
-ANALYSIS_HEADER = ["Tipo", "Papel", "Preço", "Bazin", "Graham", "Gordon", "Referência", "Folga %",
-                   "Nota", "Sinal", "Fonte", "Coletado em"]
+ANALYSIS_HEADER = ["Tipo", "Papel", "Carteira", "Preço", "Bazin", "Graham", "Gordon", "Referência",
+                   "Folga %", "Nota", "Sinal", "Fonte", "Coletado em"]
+
+SIGNAL_ORDER = ["oportunidade", "caro", "risco", "dado_velho", "neutro", "sem_dados"]
+# cores (fundo, texto) por sinal, em RGB 0-1
+SIGNAL_COLORS = {
+    "oportunidade": ((0.78, 0.94, 0.81), (0.0, 0.38, 0.0)),
+    "caro": ((1.0, 0.92, 0.70), (0.55, 0.33, 0.0)),
+    "risco": ((0.96, 0.78, 0.76), (0.61, 0.0, 0.0)),
+    "dado_velho": ((0.85, 0.85, 0.85), (0.35, 0.35, 0.35)),
+    "sem_dados": ((0.93, 0.93, 0.93), (0.45, 0.45, 0.45)),
+}
+COLUMN_WIDTHS = [70, 85, 75, 85, 85, 85, 85, 100, 80, 60, 115, 75, 105]
+
+
+def _sort_key(r: AnalysisRow):
+    order = SIGNAL_ORDER.index(r.signal) if r.signal in SIGNAL_ORDER else len(SIGNAL_ORDER)
+    return (order, -(r.score if r.score is not None else -1), r.ticker)
+
+
+def build_format_requests(sheet_id: int, existing_rules: int = 0) -> list[dict]:
+    def rng(c0, c1, r0=1, r1=1000):
+        return {"sheetId": sheet_id, "startRowIndex": r0, "endRowIndex": r1,
+                "startColumnIndex": c0, "endColumnIndex": c1}
+
+    def color(rgb):
+        return {"red": rgb[0], "green": rgb[1], "blue": rgb[2]}
+
+    n = len(ANALYSIS_HEADER)
+    reqs: list[dict] = [{"deleteConditionalFormatRule": {"sheetId": sheet_id, "index": 0}}
+                        for _ in range(existing_rules)]
+    reqs.append({"updateSheetProperties": {
+        "properties": {"sheetId": sheet_id,
+                       "gridProperties": {"frozenRowCount": 1, "frozenColumnCount": 2}},
+        "fields": "gridProperties(frozenRowCount,frozenColumnCount)"}})
+    reqs.append({"repeatCell": {
+        "range": rng(0, n, 0, 1),
+        "cell": {"userEnteredFormat": {
+            "backgroundColor": color((0.12, 0.23, 0.37)),
+            "textFormat": {"bold": True, "foregroundColor": color((1, 1, 1))},
+            "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP"}},
+        "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,"
+                  "verticalAlignment,wrapStrategy)"}})
+    for c0, c1, pattern in ((3, 8, "#,##0.00"), (8, 9, '0.0"%"'), (9, 10, "0")):
+        reqs.append({"repeatCell": {
+            "range": rng(c0, c1),
+            "cell": {"userEnteredFormat": {"numberFormat": {"type": "NUMBER", "pattern": pattern},
+                                           "horizontalAlignment": "RIGHT"}},
+            "fields": "userEnteredFormat(numberFormat,horizontalAlignment)"}})
+    reqs.append({"repeatCell": {
+        "range": rng(2, 3), "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
+        "fields": "userEnteredFormat(horizontalAlignment)"}})
+    reqs.append({"repeatCell": {
+        "range": rng(10, 11),
+        "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER", "textFormat": {"bold": True}}},
+        "fields": "userEnteredFormat(horizontalAlignment,textFormat)"}})
+    for signal, (bg, fg) in SIGNAL_COLORS.items():
+        reqs.append({"addConditionalFormatRule": {"index": 0, "rule": {
+            "ranges": [rng(10, 11)],
+            "booleanRule": {
+                "condition": {"type": "TEXT_EQ", "values": [{"userEnteredValue": signal}]},
+                "format": {"backgroundColor": color(bg), "textFormat": {"foregroundColor": color(fg)}}}}}})
+    for cond, fg in (("NUMBER_GREATER", (0.0, 0.5, 0.0)), ("NUMBER_LESS", (0.75, 0.0, 0.0))):
+        reqs.append({"addConditionalFormatRule": {"index": 0, "rule": {
+            "ranges": [rng(8, 9)],
+            "booleanRule": {
+                "condition": {"type": cond, "values": [{"userEnteredValue": "0"}]},
+                "format": {"textFormat": {"foregroundColor": color(fg), "bold": True}}}}}})
+    for i, width in enumerate(COLUMN_WIDTHS):
+        reqs.append({"updateDimensionProperties": {
+            "range": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": i, "endIndex": i + 1},
+            "properties": {"pixelSize": width}, "fields": "pixelSize"}})
+    reqs.append({"setBasicFilter": {"filter": {"range": rng(0, n, 0, 1000)}}})
+    return reqs
+
+
+def format_analysis(sh) -> None:
+    """Formata a aba Análise (cabeçalho, filtro, cores por sinal). Pode rodar toda vez."""
+    ws = sh.worksheet(ANALYSIS)
+    meta = sh.fetch_sheet_metadata({"fields": "sheets(properties(sheetId),conditionalFormats)"})
+    existing = next((len(s.get("conditionalFormats", [])) for s in meta.get("sheets", [])
+                     if s.get("properties", {}).get("sheetId") == ws.id), 0)
+    sh.batch_update({"requests": build_format_requests(ws.id, existing)})
 
 
 def read_params(sh) -> Params:
@@ -198,9 +280,9 @@ def read_watchlist(sh) -> list[WatchItem]:
 
 def write_analysis(sh, rows: list[AnalysisRow]) -> None:
     body = [
-        [r.kind, r.ticker, r.price, r.bazin, r.graham, r.gordon, r.reference, r.slack_pct,
-         r.score, r.signal, r.source, r.collected_at]
-        for r in rows
+        [r.kind, r.ticker, "Sim" if r.held else "", r.price, r.bazin, r.graham, r.gordon, r.reference,
+         r.slack_pct, r.score, r.signal, r.source, r.collected_at]
+        for r in sorted(rows, key=_sort_key)
     ]
     write_tab(sh, ANALYSIS, [ANALYSIS_HEADER] + [["" if v is None else v for v in b] for b in body])
 
