@@ -160,3 +160,13 @@ def test_provider_exposes_quality_fields():
 
     f = YahooProvider(ticker_factory=Q).fetch("WEGE3", "br")
     assert (f.roe, f.profit_margin, f.earnings_growth, f.revenue_growth) == (0.21, 0.15, 0.08, 0.11)
+
+
+def test_provider_exposes_52_week_high_and_200_day_average():
+    class E(FakeTicker):
+        @property
+        def info(self):
+            return dict(FakeTicker.info.fget(self), fiftyTwoWeekHigh=700.5, twoHundredDayAverage=640.0)
+
+    f = YahooProvider(ticker_factory=E).fetch("VOO", "us")
+    assert (f.high_52w, f.avg_200d) == (700.5, 640.0)

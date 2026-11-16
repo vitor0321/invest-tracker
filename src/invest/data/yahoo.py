@@ -89,6 +89,8 @@ class YahooProvider:
             result.profit_margin = _clean(info.get("profitMargins"))
             result.earnings_growth = _clean(info.get("earningsGrowth"))
             result.revenue_growth = _clean(info.get("revenueGrowth"))
+            result.high_52w = _clean(info.get("fiftyTwoWeekHigh"))
+            result.avg_200d = _clean(info.get("twoHundredDayAverage"))
             result.currency = info.get("currency")
             result.financial_currency = info.get("financialCurrency")
             if (result.currency and result.financial_currency

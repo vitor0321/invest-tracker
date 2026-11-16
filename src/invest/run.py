@@ -97,6 +97,19 @@ def _notes(kind: str, f: Fundamentals, p: Params, quality: QualityResult, divide
     return " | ".join(parts)
 
 
+def _etf_notes(f: Fundamentals) -> str:
+    """ETF não tem preço teto: mostra só indicadores de momento."""
+    parts = ["ETF: cesta de ações, sem preço teto"]
+    if f.high_52w and f.high_52w > 0:
+        gap = (f.high_52w - f.price) / f.high_52w * 100
+        parts.append("na máxima de 52 semanas" if gap < 0.05
+                     else f"{_pt(gap)}% abaixo da máxima de 52 semanas")
+    if f.avg_200d and f.avg_200d > 0:
+        diff = (f.price - f.avg_200d) / f.avg_200d * 100
+        parts.append(f"{_pt(abs(diff))}% {'acima' if diff >= 0 else 'abaixo'} da média de 200 dias")
+    return " | ".join(parts)
+
+
 def _growth_track(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool, age: int, row):
     """Paga menos de 2% em dividendos: preço pela fórmula de crescimento de Graham."""
     label = "Trilho crescimento (paga pouco dividendo)"
@@ -153,8 +166,7 @@ def analyze(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool, now:
     if f.price is None:
         return row("dado_velho" if age > p.max_age_days else "sem_dados")
     if kind == "etf":
-        return row("dado_velho" if age > p.max_age_days else "neutro",
-                   notes="ETF: cesta de ações, sem preço teto. Entra no patrimônio e na distribuição.")
+        return row("dado_velho" if age > p.max_age_days else "neutro", notes=_etf_notes(f))
 
     bazin = graham = gordon = None
     pvp = dy = None

@@ -28,6 +28,8 @@ class Fundamentals:
     profit_margin: float | None = None
     earnings_growth: float | None = None
     revenue_growth: float | None = None
+    high_52w: float | None = None
+    avg_200d: float | None = None
     currency: str | None = None
     financial_currency: str | None = None
     source: str = ""

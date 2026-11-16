@@ -524,3 +524,21 @@ def test_new_email_groups_by_urgency_and_explains_each_change():
 def test_etf_row_explains_why_it_has_no_reference():
     row = analyze("VOO", "etf", good("VOO"), PARAMS, held=True, now=NOW)
     assert row.signal == "neutro" and "ETF" in row.notes
+
+
+def test_etf_shows_distance_to_52_week_high_and_200_day_average():
+    f = good("VOO", price=90.0)
+    f.high_52w, f.avg_200d = 100.0, 80.0
+    row = analyze("VOO", "etf", f, PARAMS, held=True, now=NOW)
+    assert row.signal == "neutro" and row.reference is None
+    assert "10,0% abaixo da máxima de 52 semanas" in row.notes
+    assert "12,5% acima da média de 200 dias" in row.notes
+    f.price = 100.0
+    f.avg_200d = 125.0
+    notes = analyze("VOO", "etf", f, PARAMS, held=True, now=NOW).notes
+    assert "na máxima de 52 semanas" in notes and "20,0% abaixo da média de 200 dias" in notes
+
+
+def test_etf_without_indicators_still_explains_itself():
+    row = analyze("VOO", "etf", good("VOO"), PARAMS, held=True, now=NOW)
+    assert "ETF" in row.notes and "52 semanas" not in row.notes
