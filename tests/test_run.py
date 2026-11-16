@@ -298,3 +298,38 @@ def test_notes_for_clean_fii_and_failing_fii():
     f.price, f.dividend_12m = 12.0, 0.5
     note = analyze("MXRF11", "fii", f, PARAMS, held=False, now=NOW).notes
     assert "P/VP 1,20" in note and "DY 4,2%" in note
+
+
+# --- melhores por setor ---
+def test_caching_provider_fetches_each_ticker_once():
+    from invest.run import CachingProvider
+
+    calls = []
+
+    class Inner:
+        def fetch(self, ticker, market):
+            calls.append((ticker, market))
+            return good(ticker)
+
+    p = CachingProvider(Inner())
+    a, b = p.fetch("ITUB4", "br"), p.fetch("ITUB4", "br")
+    p.fetch("AAPL", "us")
+    assert a is b and calls == [("ITUB4", "br"), ("AAPL", "us")]
+
+
+def test_build_best_survives_provider_errors_and_marks_holdings():
+    from invest.run import build_best
+
+    class Flaky:
+        def fetch(self, ticker, market):
+            if ticker == "BOOM3":
+                raise RuntimeError("yahoo fora do ar")
+            f = good(ticker)
+            f.roe, f.profit_margin, f.earnings_growth = 0.2, 0.2, 0.1
+            return f
+
+    universe = [("Financeiro", "ITUB4"), ("Financeiro", "BOOM3")]
+    rows = [AR("acao_br", "ITUB4", 40.0, None, None, None, None, None, "neutro", "yahoo", "d", held=True)]
+    best, portfolio = build_best(universe, {"ITUB4": 10}, rows, PARAMS, Flaky())
+    assert [(b.ticker, b.position, b.held) for b in best] == [("ITUB4", 1, True), ("BOOM3", None, False)]
+    assert portfolio == [("Financeiro", 400.0, 100.0)]

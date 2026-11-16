@@ -227,3 +227,73 @@ def test_analysis_tab_has_reason_column_after_signal():
     header, row = sh.tabs["Análise"].values[0], sh.tabs["Análise"].values[1]
     assert header[10:13] == ["Sinal", "Motivo", "Fonte"]
     assert row[11] == "payout 134%" and row[12] == "yahoo"
+
+
+# --- melhores por setor ---
+from invest.quality import QUALITY_WEIGHTS, BestRow
+from invest.sheets import format_best, read_universe, write_best
+
+
+def test_ensure_tabs_seeds_universe_with_8_sectors_of_at_most_7():
+    sh = make_sheet()
+    ensure_tabs(sh)
+    universe = read_universe(sh)
+    sectors = {}
+    for sector, ticker in universe:
+        sectors.setdefault(sector, []).append(ticker)
+    assert len(sectors) == 8
+    assert all(1 <= len(v) <= 7 for v in sectors.values())
+    assert len({t for _, t in universe}) == len(universe)  # sem papel repetido
+    assert sh.tabs["Universo"].values[0] == ["Setor", "Papel"]
+    assert sh.tabs["Melhores por setor"].values[0][:3] == ["Setor", "Pos", "Papel"]
+
+
+def test_read_universe_skips_blank_and_incomplete_rows():
+    sh = make_sheet()
+    ensure_tabs(sh)
+    sh.tabs["Universo"].values = [["Setor", "Papel"], ["Saúde", " RDOR3 "], ["", ""], ["Saúde"], ["", "X"],
+                                  ["Financeiro", "ITUB4"]]
+    assert read_universe(sh) == [("Saúde", "RDOR3"), ("Financeiro", "ITUB4")]
+
+
+def test_write_best_puts_ranking_left_and_portfolio_block_right():
+    sh = make_sheet()
+    ensure_tabs(sh)
+    best = [BestRow("Saúde", 1, "RDOR3", True, 82, 0.214, 0.10, 0.05, -0.02, 1.25, 0.031, 4, "fraco em: margem"),
+            BestRow("Saúde", None, "XXXX3", False, None, None, None, None, None, None, None, None, "sem dados")]
+    write_best(sh, best, [("FIIs", 1000.0, 50.0), ("Exterior (US$)", 400.0, None)])
+    v = sh.tabs["Melhores por setor"].values
+    assert v[0][14:17] == ["Carteira por setor", "Valor", "% do total em R$"]
+    assert v[1][:13] == ["Saúde", 1, "RDOR3", "Sim", 82, 21.4, 10.0, 5.0, -2.0, 1.25, 3.1, 4, "fraco em: margem"]
+    assert v[1][13:17] == ["", "FIIs", 1000.0, 50.0]
+    assert v[2][:5] == ["Saúde", "", "XXXX3", "", ""] and v[2][12] == "sem dados"
+    assert v[2][14:17] == ["Exterior (US$)", 400.0, ""]
+
+
+def test_write_best_with_more_portfolio_lines_than_ranking_rows():
+    sh = make_sheet()
+    ensure_tabs(sh)
+    write_best(sh, [], [("FIIs", 10.0, 100.0)])
+    v = sh.tabs["Melhores por setor"].values
+    assert v[1][:13] == [""] * 13 and v[1][14] == "FIIs"
+
+
+def test_quality_weights_default_on_old_sheet_and_read_when_present():
+    sh = make_sheet()
+    ensure_tabs(sh)
+    assert read_params(sh).quality_weights == QUALITY_WEIGHTS
+    _set_param(sh, "q_peso_roe", 0.5)
+    w = read_params(sh).quality_weights
+    assert w["roe"] == 0.5 and w["margem"] == QUALITY_WEIGHTS["margem"]
+
+
+def test_format_best_resets_old_rules_and_sets_filter_on_ranking_only():
+    sh = make_sheet()
+    ensure_tabs(sh)
+    sh.existing_rules = 2
+    format_best(sh)
+    reqs = sh.batches[-1]["requests"]
+    kinds = [next(iter(q)) for q in reqs]
+    assert kinds[:2] == ["deleteConditionalFormatRule"] * 2
+    flt = next(q["setBasicFilter"]["filter"]["range"] for q in reqs if "setBasicFilter" in q)
+    assert (flt["startColumnIndex"], flt["endColumnIndex"]) == (0, 13)

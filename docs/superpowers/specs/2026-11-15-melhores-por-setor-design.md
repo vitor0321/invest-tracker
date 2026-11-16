@@ -48,7 +48,7 @@ Lista inicial minha; Vitor edita no `Universo`.
 - **Energia elétrica e saneamento:** TAEE11, CPLE3, EGIE3, CMIG4, AXIA3, SBSP3, SAPR11
 - **Petróleo e gás:** PETR4, PRIO3, VBBR3, UGPA3, CSAN3, BRAV3, RAIZ4
 - **Materiais básicos:** VALE3, SUZB3, KLBN11, GGBR4, CSNA3, USIM5, GOAU4
-- **Consumo e varejo:** ABEV3, LREN3, RADL3, ASAI3, NATU3, MDIA3, ARZZ3
+- **Consumo e varejo:** ABEV3, LREN3, RADL3, ASAI3, NATU3, MDIA3, AZZA3
 - **Saúde:** RDOR3, HAPV3, FLRY3, HYPE3, ODPV3, MATD3, PNVL3
 - **Indústria, transporte e agro:** WEGE3, RENT3, EMBR3, RAIL3, MOTV3, SLCE3, AGRO3
 - **Telecom e tecnologia:** VIVT3, TIMS3, TOTS3, LWSA3, INTB3, POSI3

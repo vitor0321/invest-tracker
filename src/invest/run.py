@@ -9,6 +9,7 @@ from typing import Callable
 from invest import alerts, sheets
 from invest.data.base import DataProvider, Fundamentals
 from invest.data.yahoo import YahooProvider
+from invest.quality import portfolio_by_sector, rank_by_sector
 from invest.scoring import classify, compute_score
 from invest.sheets import AnalysisRow, Params, SignalChange, WatchItem
 from invest.valuation import (
@@ -175,6 +176,33 @@ def run_once(holdings: dict[str, float], watch: list[WatchItem], params: Params,
     return rows, changes
 
 
+class CachingProvider:
+    """Evita buscar o mesmo papel duas vezes na mesma rodada."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self._cache: dict[tuple[str, str], Fundamentals] = {}
+
+    def fetch(self, ticker: str, market: str) -> Fundamentals:
+        key = (ticker, market)
+        if key not in self._cache:
+            self._cache[key] = self.inner.fetch(ticker, market)
+        return self._cache[key]
+
+
+def build_best(universe: list[tuple[str, str]], holdings: dict[str, float], rows: list[AnalysisRow],
+               params: Params, provider):
+    data: dict[str, Fundamentals] = {}
+    for _, ticker in universe:
+        try:
+            data[ticker] = provider.fetch(ticker, "br")
+        except Exception as exc:
+            log.warning("falha ao buscar %s: %s", ticker, exc)
+    best = rank_by_sector(universe, data, set(holdings), params.quality_weights)
+    portfolio = portfolio_by_sector(holdings, rows, {t: s for s, t in universe})
+    return best, portfolio
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="não envia e-mail nem grava histórico")
@@ -196,13 +224,21 @@ def main() -> int:
         if not args.dry_run:
             sheets.append_signal_changes(sh, changes)
 
-    rows, _ = run_once(sheets.read_holdings(sh), sheets.read_watchlist(sh), params,
-                       YahooProvider(), sheets.last_signals(sh), now, send, record)
+    holdings = sheets.read_holdings(sh)
+    provider = CachingProvider(YahooProvider())
+    rows, _ = run_once(holdings, sheets.read_watchlist(sh), params,
+                       provider, sheets.last_signals(sh), now, send, record)
     sheets.write_analysis(sh, rows)
     try:
         sheets.format_analysis(sh)
     except Exception as exc:  # visual nunca derruba a rodada
         log.warning("formatação falhou: %s", exc)
+    try:  # aba extra: nunca derruba a rodada principal
+        best, portfolio = build_best(sheets.read_universe(sh), holdings, rows, params, provider)
+        sheets.write_best(sh, best, portfolio)
+        sheets.format_best(sh)
+    except Exception as exc:
+        log.warning("melhores por setor falhou: %s", exc)
     return 0
 
 

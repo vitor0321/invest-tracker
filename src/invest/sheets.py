@@ -4,11 +4,29 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
+from invest.quality import QUALITY_WEIGHTS, BestRow
+
 from gspread.exceptions import WorksheetNotFound  # noqa: F401 (reexportado)
 
 SHEET_ID = "1ukZLWORhufJVCoo7SsqMFyPVQNY5ykr0IcfmdfIwHkw"
 ANALYSIS, WATCH, PARAMS, HISTORY = "Análise", "Observação", "Parâmetros", "Histórico de sinais"
-OWN_TABS = (ANALYSIS, WATCH, PARAMS, HISTORY)
+UNIVERSE, BEST = "Universo", "Melhores por setor"
+OWN_TABS = (ANALYSIS, WATCH, PARAMS, HISTORY, UNIVERSE, BEST)
+
+# Candidatos iniciais por setor (editável na aba Universo). O ranking mostra os 5 melhores de cada.
+SEED_UNIVERSE = {
+    "Financeiro": ["ITUB4", "BBAS3", "BBDC4", "BPAC11", "BBSE3", "B3SA3", "CXSE3"],
+    "Energia elétrica e saneamento": ["TAEE11", "CPLE3", "EGIE3", "CMIG4", "AXIA3", "SBSP3", "SAPR11"],
+    "Petróleo e gás": ["PETR4", "PRIO3", "VBBR3", "UGPA3", "CSAN3", "BRAV3", "RAIZ4"],
+    "Materiais básicos": ["VALE3", "SUZB3", "KLBN11", "GGBR4", "CSNA3", "USIM5", "GOAU4"],
+    "Consumo e varejo": ["ABEV3", "LREN3", "RADL3", "ASAI3", "NATU3", "MDIA3", "AZZA3"],
+    "Saúde": ["RDOR3", "HAPV3", "FLRY3", "HYPE3", "ODPV3", "MATD3", "PNVL3"],
+    "Indústria, transporte e agro": ["WEGE3", "RENT3", "EMBR3", "RAIL3", "MOTV3", "SLCE3", "AGRO3"],
+    "Telecom e tecnologia": ["VIVT3", "TIMS3", "TOTS3", "LWSA3", "INTB3", "POSI3"],
+}
+BEST_HEADER = ["Setor", "Pos", "Papel", "Carteira", "Nota", "ROE %", "Margem %", "Cresc. lucro %",
+               "Cresc. receita %", "Dív/EBITDA", "DY 12m %", "Anos sem corte", "Motivo"]
+PORTFOLIO_HEADER = ["Carteira por setor", "Valor", "% do total em R$"]
 
 DEFAULT_PARAMS = [
     ("ntnb_real", 0.074),          # juro real do Tesouro IPCA+ longo; atualizar todo mês
@@ -67,6 +85,7 @@ class Params:
     email: str
     types: dict[str, str]
     vpa_manual: dict[str, float] = field(default_factory=dict)
+    quality_weights: dict[str, float] = field(default_factory=lambda: dict(QUALITY_WEIGHTS))
 
 
 @dataclass
@@ -134,7 +153,7 @@ def ensure_tabs(sh) -> None:
     for title in OWN_TABS:
         if title in existing:
             continue
-        sh.add_worksheet(title=title, rows=1000, cols=12)
+        sh.add_worksheet(title=title, rows=1000, cols=20)
         if title == PARAMS:
             n = max(len(DEFAULT_PARAMS), len(SEED_TYPES))
             rows = [["Parâmetro", "Valor", "", "Papel", "Tipo", "VPA manual"]]
@@ -149,6 +168,11 @@ def ensure_tabs(sh) -> None:
             write_tab(sh, ANALYSIS, [ANALYSIS_HEADER])
         elif title == HISTORY:
             write_tab(sh, HISTORY, [["Data", "Papel", "De", "Para"]])
+        elif title == UNIVERSE:
+            write_tab(sh, UNIVERSE, [["Setor", "Papel"]] + [[sector, t] for sector, tickers
+                                                             in SEED_UNIVERSE.items() for t in tickers])
+        elif title == BEST:
+            write_tab(sh, BEST, [BEST_HEADER + [""] + PORTFOLIO_HEADER])
 
 
 ANALYSIS_HEADER = ["Tipo", "Papel", "Carteira", "Preço", "Bazin", "Graham", "Gordon", "Referência",
@@ -261,6 +285,7 @@ def read_params(sh) -> Params:
             "regularidade": float(kv["peso_regularidade"]),
         },
         email=str(kv["email"]),
+        quality_weights={k: rate(f"q_peso_{k}", v) for k, v in QUALITY_WEIGHTS.items()},
         types=types,
         vpa_manual={
             str(r[3]).strip(): v
@@ -301,3 +326,91 @@ def append_signal_changes(sh, changes: list[SignalChange]) -> None:
         sh.worksheet(HISTORY).append_rows(
             [[c.date, c.ticker, c.old, c.new] for c in changes], value_input_option="RAW"
         )
+
+
+def read_universe(sh) -> list[tuple[str, str]]:
+    rows = _get(sh, UNIVERSE)[1:]
+    return [(str(r[0]).strip(), str(r[1]).strip()) for r in rows
+            if len(r) >= 2 and str(r[0]).strip() and str(r[1]).strip()]
+
+
+def _pct(x: float | None) -> float | str:
+    return "" if x is None else round(x * 100, 1)
+
+
+def write_best(sh, best: list[BestRow], portfolio: list[tuple[str, float, float | None]]) -> None:
+    left = [[b.sector, b.position, b.ticker, "Sim" if b.held else "", b.score, _pct(b.roe), _pct(b.margin),
+             _pct(b.earnings_growth), _pct(b.revenue_growth),
+             None if b.net_debt_ebitda is None else round(b.net_debt_ebitda, 2),
+             _pct(b.dy_12m), b.years_without_cut, b.notes] for b in best]
+    right = [list(p) for p in portfolio]
+    rows = [BEST_HEADER + [""] + PORTFOLIO_HEADER]
+    for i in range(max(len(left), len(right))):
+        a = left[i] if i < len(left) else [""] * len(BEST_HEADER)
+        b = right[i] if i < len(right) else [""] * len(PORTFOLIO_HEADER)
+        rows.append(["" if v is None else v for v in a + [""] + b])
+    write_tab(sh, BEST, rows)
+
+
+BEST_WIDTHS = [210, 45, 80, 75, 60, 70, 80, 95, 105, 95, 80, 95, 300, 30, 210, 110, 120]
+
+
+def build_best_format_requests(sheet_id: int, existing_rules: int = 0) -> list[dict]:
+    def rng(c0, c1, r0=1, r1=1000):
+        return {"sheetId": sheet_id, "startRowIndex": r0, "endRowIndex": r1,
+                "startColumnIndex": c0, "endColumnIndex": c1}
+
+    def color(rgb):
+        return {"red": rgb[0], "green": rgb[1], "blue": rgb[2]}
+
+    def fmt(c0, c1, pattern):
+        return {"repeatCell": {
+            "range": rng(c0, c1),
+            "cell": {"userEnteredFormat": {"numberFormat": {"type": "NUMBER", "pattern": pattern},
+                                           "horizontalAlignment": "RIGHT"}},
+            "fields": "userEnteredFormat(numberFormat,horizontalAlignment)"}}
+
+    n = len(BEST_HEADER)
+    reqs: list[dict] = [{"deleteConditionalFormatRule": {"sheetId": sheet_id, "index": 0}}
+                        for _ in range(existing_rules)]
+    reqs.append({"updateSheetProperties": {
+        "properties": {"sheetId": sheet_id, "gridProperties": {"frozenRowCount": 1}},
+        "fields": "gridProperties.frozenRowCount"}})
+    for c0, c1 in ((0, n), (n + 1, n + 1 + len(PORTFOLIO_HEADER))):
+        reqs.append({"repeatCell": {
+            "range": rng(c0, c1, 0, 1),
+            "cell": {"userEnteredFormat": {
+                "backgroundColor": color((0.12, 0.23, 0.37)),
+                "textFormat": {"bold": True, "foregroundColor": color((1, 1, 1))},
+                "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP"}},
+            "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,"
+                      "verticalAlignment,wrapStrategy)"}})
+    reqs += [fmt(5, 9, '0.0"%"'), fmt(9, 10, "0.00"), fmt(10, 11, '0.0"%"'),
+             fmt(15, 16, "#,##0.00"), fmt(16, 17, '0.0"%"')]
+    for c0, c1 in ((1, 2), (3, 5), (11, 12)):
+        reqs.append({"repeatCell": {
+            "range": rng(c0, c1), "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
+            "fields": "userEnteredFormat(horizontalAlignment)"}})
+    for cond, value, (bg, fg) in (("NUMBER_GREATER_THAN_EQ", "70", SIGNAL_COLORS["oportunidade"]),
+                                  ("NUMBER_LESS", "40", SIGNAL_COLORS["risco"])):
+        reqs.append({"addConditionalFormatRule": {"index": 0, "rule": {
+            "ranges": [rng(4, 5)],
+            "booleanRule": {
+                "condition": {"type": cond, "values": [{"userEnteredValue": value}]},
+                "format": {"backgroundColor": color(bg),
+                           "textFormat": {"foregroundColor": color(fg), "bold": True}}}}}})
+    for i, width in enumerate(BEST_WIDTHS):
+        reqs.append({"updateDimensionProperties": {
+            "range": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": i, "endIndex": i + 1},
+            "properties": {"pixelSize": width}, "fields": "pixelSize"}})
+    reqs.append({"setBasicFilter": {"filter": {"range": rng(0, n, 0, 1000)}}})
+    return reqs
+
+
+def format_best(sh) -> None:
+    """Formata a aba Melhores por setor. Pode rodar toda vez."""
+    ws = sh.worksheet(BEST)
+    meta = sh.fetch_sheet_metadata({"fields": "sheets(properties(sheetId),conditionalFormats)"})
+    existing = next((len(s.get("conditionalFormats", [])) for s in meta.get("sheets", [])
+                     if s.get("properties", {}).get("sheetId") == ws.id), 0)
+    sh.batch_update({"requests": build_best_format_requests(ws.id, existing)})
