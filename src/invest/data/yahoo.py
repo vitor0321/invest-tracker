@@ -41,6 +41,11 @@ def _years_without_cut(annual: list[float]) -> int:
     return count
 
 
+def _clean(x) -> float | None:
+    """Número finito ou None (o Yahoo às vezes devolve texto ou NaN)."""
+    return float(x) if isinstance(x, (int, float)) and not isinstance(x, bool) and x == x else None
+
+
 def _last_payment(dividends) -> float | None:
     values = [(ts, float(v)) for ts, v in dividends.items()]
     return max(values, key=lambda item: item[0])[1] if values else None
@@ -80,6 +85,10 @@ class YahooProvider:
             result.dividend_12m, result.months_paid_12m = _trailing_12m(t.dividends)
             result.last_dividend = _last_payment(t.dividends)
             result.sector = info.get("sector")
+            result.roe = _clean(info.get("returnOnEquity"))
+            result.profit_margin = _clean(info.get("profitMargins"))
+            result.earnings_growth = _clean(info.get("earningsGrowth"))
+            result.revenue_growth = _clean(info.get("revenueGrowth"))
             result.currency = info.get("currency")
             result.financial_currency = info.get("financialCurrency")
             if (result.currency and result.financial_currency

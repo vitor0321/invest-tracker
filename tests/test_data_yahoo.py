@@ -149,3 +149,14 @@ def test_provider_exposes_sector():
             return dict(FakeTicker.info.fget(self), sector="Financial Services")
 
     assert YahooProvider(ticker_factory=Bank).fetch("ITUB4", "br").sector == "Financial Services"
+
+
+def test_provider_exposes_quality_fields():
+    class Q(FakeTicker):
+        @property
+        def info(self):
+            return dict(FakeTicker.info.fget(self), returnOnEquity=0.21, profitMargins=0.15,
+                        earningsGrowth=0.08, revenueGrowth=0.11)
+
+    f = YahooProvider(ticker_factory=Q).fetch("WEGE3", "br")
+    assert (f.roe, f.profit_margin, f.earnings_growth, f.revenue_growth) == (0.21, 0.15, 0.08, 0.11)

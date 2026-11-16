@@ -24,6 +24,10 @@ class Fundamentals:
     months_paid_12m: int = 0
     last_dividend: float | None = None
     sector: str | None = None
+    roe: float | None = None
+    profit_margin: float | None = None
+    earnings_growth: float | None = None
+    revenue_growth: float | None = None
     currency: str | None = None
     financial_currency: str | None = None
     source: str = ""
