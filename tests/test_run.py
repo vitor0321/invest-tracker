@@ -542,3 +542,94 @@ def test_etf_shows_distance_to_52_week_high_and_200_day_average():
 def test_etf_without_indicators_still_explains_itself():
     row = analyze("VOO", "etf", good("VOO"), PARAMS, held=True, now=NOW)
     assert "ETF" in row.notes and "52 semanas" not in row.notes
+
+
+# --- crescimento de vários anos, alocação alvo, resumo semanal e aviso de falha ---
+def test_growth_note_says_where_the_growth_rate_came_from():
+    f = grower()
+    f.growth_years = 3
+    assert "média de 3 anos" in analyze("X", "eua", f, PARAMS, False, NOW).notes
+    assert "último trimestre" in analyze("X", "eua", grower(), PARAMS, False, NOW).notes
+
+
+def _alloc_rows():
+    return [AR("acao_br", "ITUB4", 100.0, None, None, None, None, None, "neutro", "yahoo", "d", held=True),
+            AR("fii", "MXRF11", 10.0, None, None, None, None, None, "neutro", "yahoo", "d", held=True),
+            AR("eua", "AAPL", 100.0, None, None, None, None, None, "neutro", "yahoo", "d", held=True),
+            AR("etf", "VXUS", 50.0, None, None, None, None, None, "neutro", "yahoo", "d", held=True)]
+
+
+def test_allocation_compares_each_class_with_its_target_and_ignores_the_reserve():
+    from invest.portfolio import build_allocation
+
+    holdings = {"ITUB4": 20, "MXRF11": 100, "AAPL": 2, "VXUS": 4}  # 2000 + 1000 + 1000 + 1000 (dólar a 5)
+    alloc = build_allocation(holdings, _alloc_rows(), {"VXUS": "Exterior fora dos EUA"},
+                             {"Ações Brasil": 0.30, "FIIs": 0.20, "Ações EUA": 0.20,
+                              "Exterior fora dos EUA": 0.20, "Renda fixa em dólar": 0.10}, usd_brl=5.0)
+    by = {a.label: a for a in alloc}
+    assert by["Ações Brasil"].value == 2000.0 and by["Ações Brasil"].pct == 40.0
+    assert by["Ações Brasil"].target == 30.0 and by["Ações Brasil"].deviation == 10.0
+    assert by["Ações Brasil"].gap == -500.0                      # sobra
+    assert by["Renda fixa em dólar"].value == 0.0 and by["Renda fixa em dólar"].gap == 500.0  # falta
+    assert alloc[0].label == "Renda fixa em dólar"               # onde o próximo aporte ajuda mais vem primeiro
+
+
+def test_allocation_without_targets_shows_only_current_weights():
+    from invest.portfolio import build_allocation
+
+    alloc = build_allocation({"ITUB4": 20, "AAPL": 2}, _alloc_rows(), {}, {}, usd_brl=5.0)
+    assert {a.label: (a.pct, a.target, a.gap) for a in alloc} == {
+        "Ações Brasil": (66.7, None, None), "Ações EUA": (33.3, None, None)}
+
+
+def test_allocation_without_dollar_rate_is_empty():
+    from invest.portfolio import build_allocation
+
+    assert build_allocation({"ITUB4": 20, "AAPL": 2}, _alloc_rows(), {}, {}, usd_brl=None) == []
+
+
+def test_health_problems_flags_data_outage_but_not_a_couple_of_misses():
+    from invest.run import health_problems
+
+    ok = [AR("acao_br", f"A{i}", 10.0, None, None, None, None, None, "neutro", "yahoo", "d") for i in range(8)]
+    miss = [AR("acao_br", f"B{i}", None, None, None, None, None, None, "sem_dados", "yahoo", "d") for i in range(2)]
+    assert health_problems(ok + miss) == []
+    out = health_problems(ok[:2] + miss * 3)
+    assert len(out) == 1 and "sem preço" in out[0]
+    assert health_problems([]) == ["nenhum papel analisado"]
+
+
+def test_problem_email_lists_what_went_wrong():
+    from invest.alerts import render_problem_email
+
+    subject, body = render_problem_email(["resumo falhou: boom", "6 de 8 papéis sem preço"])
+    assert "problema" in subject.lower()
+    assert "resumo falhou: boom" in body and "6 de 8 papéis sem preço" in body
+
+
+def test_weekly_summary_email_shows_total_distribution_allocation_and_lists():
+    from invest.alerts import render_summary_email
+    from invest.portfolio import Allocation, Summary
+
+    opp = AR("eua", "NVDA", 162.85, None, None, None, 67.9, 70, "oportunidade", "yahoo", "d", reference=273.46,
+             held=True, notes="PEG 1,4")
+    s = Summary("2026-11-20", [("Financeiro", 6000.0, 60.0), ("FIIs", 4000.0, 40.0)], 10000.0, 5.69,
+                [("oportunidade", 1, 0)], [opp], [],
+                [Allocation("Renda fixa em dólar", 0.0, 0.0, 10.0, -10.0, 1000.0),
+                 Allocation("Ações Brasil", 6000.0, 60.0, 50.0, 10.0, -1000.0)])
+    subject, text, html = render_summary_email(s)
+    assert "resumo" in subject.lower() and "10.000,00" in subject
+    for piece in ("Financeiro", "60,0%", "NVDA", "US$ 162,85", "Renda fixa em dólar", "falta R$ 1.000,00",
+                  "sobra R$ 1.000,00", "docs.google.com/spreadsheets/d/"):
+        assert piece in html, piece
+    assert "Financeiro" in text and "NVDA" in text
+
+
+def test_should_send_weekly_summary_only_on_scheduled_fridays_or_when_asked():
+    from invest.run import wants_summary
+
+    friday, monday = datetime(2026, 11, 20, 21, tzinfo=timezone.utc), datetime(2026, 11, 16, 21, tzinfo=timezone.utc)
+    assert wants_summary(friday, "schedule", False) is True
+    assert wants_summary(monday, "schedule", False) is False
+    assert wants_summary(friday, "workflow_dispatch", False) is False
+    assert wants_summary(monday, "workflow_dispatch", True) is True

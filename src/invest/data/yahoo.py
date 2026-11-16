@@ -46,6 +46,33 @@ def _clean(x) -> float | None:
     return float(x) if isinstance(x, (int, float)) and not isinstance(x, bool) and x == x else None
 
 
+def _cagr(series) -> tuple[float | None, int | None]:
+    """Crescimento anual composto entre o balanço mais antigo e o mais novo (mínimo 3 balanços)."""
+    points = sorted((ts, float(v)) for ts, v in series.items() if v is not None and v == v)
+    if len(points) < 3:
+        return None, None
+    (t0, first), (t1, last) = points[0], points[-1]
+    years = t1.year - t0.year
+    if years < 2:
+        return None, None
+    if first <= 0 or last <= 0:
+        return None, years
+    return (last / first) ** (1 / years) - 1, years
+
+
+def _statement_growth(ticker) -> tuple[float | None, float | None, int | None]:
+    """(lucro, receita, anos) pelos balanços anuais; anos None = não deu para usar."""
+    stmt = getattr(ticker, "income_stmt", None)
+    if stmt is None or not hasattr(stmt, "index"):
+        return None, None, None
+    revenue, r_years = _cagr(stmt.loc["Total Revenue"]) if "Total Revenue" in stmt.index else (None, None)
+    income, i_years = _cagr(stmt.loc["Net Income"]) if "Net Income" in stmt.index else (None, None)
+    years = r_years or i_years
+    if revenue is None and income is None:
+        return None, None, None
+    return income, revenue, years
+
+
 def _last_payment(dividends) -> float | None:
     values = [(ts, float(v)) for ts, v in dividends.items()]
     return max(values, key=lambda item: item[0])[1] if values else None
@@ -89,6 +116,12 @@ class YahooProvider:
             result.profit_margin = _clean(info.get("profitMargins"))
             result.earnings_growth = _clean(info.get("earningsGrowth"))
             result.revenue_growth = _clean(info.get("revenueGrowth"))
+            try:  # balanço anual é um pedido a mais: se falhar, fica o dado do trimestre
+                income, revenue, years = _statement_growth(t)
+                if years:
+                    result.earnings_growth, result.revenue_growth, result.growth_years = income, revenue, years
+            except Exception as exc:
+                log.warning("balanço anual falhou para %s: %s", ticker, exc)
             result.high_52w = _clean(info.get("fiftyTwoWeekHigh"))
             result.avg_200d = _clean(info.get("twoHundredDayAverage"))
             result.currency = info.get("currency")

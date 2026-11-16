@@ -146,7 +146,8 @@ def _growth_track(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool
     parts = [label]
     if fails:
         parts.append("Reprovou: " + "; ".join(fails))
-    parts.append(f"Referência: Graham de crescimento (g {_pt(growth * 100)}%)")
+    basis = f"média de {f.growth_years} anos" if f.growth_years else "último trimestre"
+    parts.append(f"Referência: Graham de crescimento (g {_pt(growth * 100)}%, {basis})")
     if growth > 0:
         parts.append(f"PEG {_pt(f.price / f.eps / (growth * 100))}")
     return row(signal, None, graham, None, slack, score, reference, " | ".join(parts))
@@ -289,22 +290,61 @@ def build_best(universe: list[tuple[str, str]], holdings: dict[str, float], rows
     return best, portfolio
 
 
+def health_problems(rows: list[AnalysisRow]) -> list[str]:
+    """Sinais de que a rodada não é confiável (fonte de dados fora do ar, nada analisado)."""
+    if not rows:
+        return ["nenhum papel analisado"]
+    missing = sum(1 for r in rows if r.price is None)
+    if missing / len(rows) > 0.5:
+        return [f"{missing} de {len(rows)} papéis sem preço: a fonte de dados (Yahoo) pode estar fora do ar"]
+    return []
+
+
+def wants_summary(now: datetime, event: str, forced: bool) -> bool:
+    """Resumo semanal: na rodada agendada de sexta-feira, ou quando pedido à mão."""
+    return forced or (event == "schedule" and now.weekday() == 4)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="não envia e-mail nem grava histórico")
+    ap.add_argument("--summary", action="store_true", help="envia o resumo semanal nesta rodada")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO)
-    sh = sheets.open_sheet(os.environ["GOOGLE_SA_JSON"])
-    sheets.ensure_tabs(sh)
-    params = sheets.read_params(sh)
-    now = datetime.now(timezone.utc)
     user = os.environ.get("SMTP_USER", "vitorwalcker.dev@gmail.com")
+    state = {"to": user}
 
     def send(subject: str, body: str, to: str, html: str | None = None) -> None:
         if args.dry_run:
             print(subject, body, sep="\n")
         else:
             alerts.send_email(subject, body, to, user, os.environ["SMTP_APP_PASSWORD"], html)
+
+    try:
+        problems = _run(args, send, state)
+    except Exception as exc:  # a rodada quebrou: avisa e deixa o GitHub marcar como falha
+        log.exception("rodada falhou")
+        try:
+            send(*alerts.render_problem_email([f"a rodada parou com erro: {type(exc).__name__}: {exc}"]),
+                 state["to"])
+        except Exception as mail_exc:
+            log.warning("não consegui avisar por e-mail: %s", mail_exc)
+        raise
+    if problems:
+        try:
+            send(*alerts.render_problem_email(problems), state["to"])
+        except Exception as exc:
+            log.warning("não consegui avisar por e-mail: %s", exc)
+    return 0
+
+
+def _run(args, send, state: dict) -> list[str]:
+    problems: list[str] = []
+    sh = sheets.open_sheet(os.environ["GOOGLE_SA_JSON"])
+    sheets.ensure_tabs(sh)
+    params = sheets.read_params(sh)
+    state["to"] = params.email
+    now = datetime.now(timezone.utc)
 
     def record(changes):
         if not args.dry_run:
@@ -314,11 +354,13 @@ def main() -> int:
     provider = CachingProvider(YahooProvider())
     rows, _ = run_once(holdings, sheets.read_watchlist(sh), params,
                        provider, sheets.last_signals(sh), now, send, record)
+    problems += health_problems(rows)
     sheets.write_analysis(sh, rows)
     try:
         sheets.format_analysis(sh)
     except Exception as exc:  # visual nunca derruba a rodada
         log.warning("formatação falhou: %s", exc)
+        problems.append(f"formatação da aba Análise falhou: {exc}")
     universe: list[tuple[str, str]] = []
     try:  # abas extras: nunca derrubam a rodada principal
         universe = sheets.read_universe(sh)
@@ -327,18 +369,26 @@ def main() -> int:
         sheets.format_best(sh)
     except Exception as exc:
         log.warning("melhores por setor falhou: %s", exc)
+        problems.append(f"aba Melhores por setor falhou: {exc}")
     try:
         usd_brl = None
         try:
             usd_brl = provider.fetch("BRL=X", "us").price  # dólar em reais
         except Exception as exc:
             log.warning("cotação do dólar falhou: %s", exc)
+        if not usd_brl:
+            problems.append("sem cotação do dólar: exterior ficou fora dos percentuais")
+        targets, classes = sheets.read_allocation(sh)
         summary = build_summary(holdings, rows, {t: s for s, t in universe}, params.reserve,
-                                params.reserve_label, usd_brl, now.date().isoformat())
+                                params.reserve_label, usd_brl, now.date().isoformat(), classes, targets)
         sheets.format_summary(sh, sheets.write_summary(sh, summary))
+        if wants_summary(now, os.environ.get("GITHUB_EVENT_NAME", ""), args.summary):
+            subject, text, html = alerts.render_summary_email(summary)
+            send(subject, text, params.email, html)
     except Exception as exc:
         log.warning("resumo falhou: %s", exc)
-    return 0
+        problems.append(f"aba Resumo ou resumo semanal falhou: {exc}")
+    return problems
 
 
 if __name__ == "__main__":

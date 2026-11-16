@@ -8,6 +8,10 @@ on:
         description: "Não enviar e-mail nem gravar histórico"
         type: boolean
         default: false
+      resumo:
+        description: "Enviar o resumo semanal agora"
+        type: boolean
+        default: false
 concurrency: daily
 jobs:
   run:
@@ -19,7 +23,7 @@ jobs:
           python-version: "3.12"
       - run: pip install -e '.[dev]'
       - run: pytest -q
-      - run: python -m invest.run ${{ inputs.dry_run && '--dry-run' || '' }}
+      - run: python -m invest.run ${{ inputs.dry_run && '--dry-run' || '' }} ${{ inputs.resumo && '--summary' || '' }}
         env:
           GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
           SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}

@@ -418,3 +418,47 @@ def test_no_request_field_mask_uses_parentheses():
     reqs = build_format_requests(7) + build_best_format_requests(7) + build_summary_format_requests(7, layout, [])
     masks = [body["fields"] for q in reqs for body in q.values() if isinstance(body, dict) and "fields" in body]
     assert masks and not [m for m in masks if "(" in m]
+
+
+# --- alocação alvo ---
+from invest.portfolio import Allocation
+from invest.sheets import read_allocation
+
+
+def test_allocation_tab_is_seeded_without_targets_and_read_back():
+    sh = make_sheet()
+    ensure_tabs(sh)
+    v = sh.tabs["Alocação alvo"].values
+    assert v[0] == ["Classe", "% alvo", "", "Papel", "Classe"]
+    targets, classes = read_allocation(sh)
+    assert targets == {}                                   # o alvo é decisão do dono da carteira
+    assert classes["VXUS"] == "Exterior fora dos EUA" and classes["BND"] == "Renda fixa em dólar"
+
+
+def test_allocation_targets_accept_30_or_0_30_and_ignore_blanks():
+    sh = make_sheet()
+    ensure_tabs(sh)
+    sh.tabs["Alocação alvo"].values = [["Classe", "% alvo", "", "Papel", "Classe"],
+                                       ["Ações Brasil", 30, "", "VXUS", "Exterior fora dos EUA"],
+                                       ["FIIs", 0.2, "", "", ""], ["Ações EUA", "", "", "QQQ", ""],
+                                       ["", "", "", "", ""]]
+    targets, classes = read_allocation(sh)
+    assert targets == {"Ações Brasil": 0.30, "FIIs": 0.20}
+    assert classes == {"VXUS": "Exterior fora dos EUA"}
+
+
+def test_summary_tab_shows_allocation_block_when_present():
+    sh = make_sheet()
+    ensure_tabs(sh)
+    s = _summary()
+    s.allocation = [Allocation("Renda fixa em dólar", 0.0, 0.0, 10.0, -10.0, 1000.0),
+                    Allocation("Ações Brasil", 6000.0, 60.0, None, None, None)]
+    layout = write_summary(sh, s)
+    v = sh.tabs["Resumo"].values
+    a = layout["alloc_first"]
+    assert v[a - 1][:6] == ["Alocação por classe (sem a reserva)", "Valor (R$)", "% atual", "% alvo",
+                            "Desvio (p.p.)", "Falta (+) ou sobra (−) em R$"]
+    assert v[a][:6] == ["Renda fixa em dólar", 0.0, 0.0, 10.0, -10.0, 1000.0]
+    assert v[a + 1][:6] == ["Ações Brasil", 6000.0, 60.0, "", "", ""]
+    assert layout["alloc_rows"] == 2 and (a - 1) in layout["section_rows"]
+    format_summary(sh, layout)  # não quebra com o bloco novo

@@ -125,6 +125,87 @@ def render_email_html(changes: list[SignalChange], rows: list[AnalysisRow] | Non
     )
 
 
+def render_problem_email(problems: list[str]) -> tuple[str, str]:
+    subject = f"Investimentos: {len(problems)} problema(s) na rodada"
+    body = ("A rodada automática terminou com problemas:\n\n" + "\n".join(f"- {p}" for p in problems)
+            + f"\n\nA planilha pode estar desatualizada: {SHEET_URL}\n"
+            "Os detalhes ficam no registro da rodada, na aba Actions do repositório.")
+    return subject, body
+
+
+def _summary_table(title: str, header: list[str], rows: list[list[str]]) -> str:
+    if not rows:
+        return ""
+    th = "".join(f'<th style="padding:7px 10px;background:#1f3a5f;color:#fff;font-size:12px;'
+                 f'text-align:{"left" if i == 0 else "right"}">{h}</th>' for i, h in enumerate(header))
+    body = "".join(
+        "<tr>" + "".join(
+            f'<td style="padding:7px 10px;border-bottom:1px solid #e3e7ee;font-size:13px;'
+            f'text-align:{"left" if i == 0 else "right"}">{c}</td>' for i, c in enumerate(r)) + "</tr>"
+        for r in rows)
+    return (f'<h3 style="margin:22px 0 8px;font-size:15px;color:#1f3a5f">{title}</h3>'
+            '<table cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;background:#fff;'
+            f'border:1px solid #e3e7ee"><tr>{th}</tr>{body}</table>')
+
+
+def _p1(x: float | None) -> str:
+    return "—" if x is None else f"{x:.1f}".replace(".", ",") + "%"
+
+
+def _gap_text(gap: float | None) -> str:
+    if gap is None:
+        return "—"
+    if abs(gap) < 0.005:
+        return "no alvo"
+    return f"{'falta' if gap > 0 else 'sobra'} R$ {_br(abs(gap))}"
+
+
+def render_summary_email(s) -> tuple[str, str, str]:
+    """Resumo semanal: (assunto, texto simples, HTML)."""
+    subject = f"Investimentos: resumo semanal — R$ {_br(s.total_brl)}"
+    dist = [[label, f"R$ {_br(value)}" if pct is not None else f"US$ {_br(value)}",
+             _p1(pct)] for label, value, pct in s.distribution]
+    alloc = [[a.label, _p1(a.pct), _p1(a.target), _gap_text(a.gap)]
+             for a in s.allocation]
+
+    def lines(items):
+        return [[f"<b>{r.ticker}</b>" + (" · na carteira" if r.held else ""), _money(r, r.price),
+                 _money(r, r.reference), _p1(r.slack_pct),
+                 f'<span style="color:#667;font-size:12px">{r.notes}</span>'] for r in items]
+
+    counts = " ".join(
+        f'<span style="background:{_BADGE.get(k, _BADGE["neutro"])[0]};color:{_BADGE.get(k, _BADGE["neutro"])[1]};'
+        f'padding:4px 10px;border-radius:12px;font-size:13px;font-weight:bold;white-space:nowrap">'
+        f'{held + watch} {k}</span>' for k, held, watch in s.counts)
+    list_header = ["Papel", "Preço", "Referência", "Folga", "Motivo"]
+    html = (
+        '<div style="font-family:Arial,Helvetica,sans-serif;max-width:680px;margin:0 auto;color:#222;'
+        'background:#f6f8fb;padding:20px">'
+        '<div style="background:#1f3a5f;color:#fff;padding:16px 18px;border-radius:6px 6px 0 0">'
+        f'<div style="font-size:12px;opacity:.8">Resumo semanal · {s.date}</div>'
+        f'<div style="font-size:22px;font-weight:bold;margin-top:2px">R$ {_br(s.total_brl)}</div>'
+        '<div style="font-size:12px;opacity:.8">patrimônio acompanhado'
+        + (f' · dólar a R$ {_br(s.usd_brl)}' if s.usd_brl else "") + '</div></div>'
+        f'<div style="background:#fff;padding:12px 18px;border:1px solid #e3e7ee;border-top:0">{counts}</div>'
+        + _summary_table("Distribuição do patrimônio", ["Setor", "Valor", "%"], dist)
+        + _summary_table("Alocação por classe (sem a reserva)", ["Classe", "Atual", "Alvo", "Para o alvo"], alloc)
+        + _summary_table("Oportunidades em aberto", list_header, lines(s.opportunities))
+        + _summary_table("Atenção na carteira (caro e risco)", list_header, lines(s.attention))
+        + f'<p style="margin:22px 0"><a href="{SHEET_URL}" style="background:#1f3a5f;color:#fff;'
+        'text-decoration:none;padding:10px 16px;border-radius:4px;font-size:14px">Abrir a planilha</a></p>'
+        '<p style="font-size:12px;color:#667">Números do sistema, não é uma ordem de compra ou venda.</p></div>'
+    )
+    text = "\n".join(
+        [f"Patrimônio acompanhado: R$ {_br(s.total_brl)} ({s.date})", "", "Distribuição:"]
+        + [f"  {label}: {value} ({pct})" for label, value, pct in dist]
+        + (["", "Alocação por classe:"] + [f"  {a[0]}: {a[1]} (alvo {a[2]}) {a[3]}" for a in alloc] if alloc else [])
+        + ["", "Oportunidades:"] + [f"  {r.ticker}: {_money(r, r.price)}, referência {_money(r, r.reference)}"
+                                    for r in s.opportunities]
+        + ["", "Atenção na carteira:"] + [f"  {r.ticker}: {r.signal}, {_money(r, r.price)}" for r in s.attention]
+        + ["", SHEET_URL])
+    return subject, text, html
+
+
 def send_email(subject: str, body: str, to: str, user: str, password: str,
                html: str | None = None) -> None:
     msg = EmailMessage()

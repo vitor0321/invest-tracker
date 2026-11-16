@@ -28,6 +28,7 @@ class Fundamentals:
     profit_margin: float | None = None
     earnings_growth: float | None = None
     revenue_growth: float | None = None
+    growth_years: int | None = None  # anos do balanço usados no crescimento; None = último trimestre
     high_52w: float | None = None
     avg_200d: float | None = None
     currency: str | None = None

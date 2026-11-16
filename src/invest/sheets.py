@@ -11,8 +11,16 @@ from gspread.exceptions import WorksheetNotFound  # noqa: F401 (reexportado)
 
 SHEET_ID = "1ukZLWORhufJVCoo7SsqMFyPVQNY5ykr0IcfmdfIwHkw"
 ANALYSIS, WATCH, PARAMS, HISTORY = "Análise", "Observação", "Parâmetros", "Histórico de sinais"
-UNIVERSE, BEST, SUMMARY = "Universo", "Melhores por setor", "Resumo"
-OWN_TABS = (ANALYSIS, WATCH, PARAMS, HISTORY, UNIVERSE, BEST, SUMMARY)
+UNIVERSE, BEST, SUMMARY, ALLOCATION = "Universo", "Melhores por setor", "Resumo", "Alocação alvo"
+OWN_TABS = (ANALYSIS, WATCH, PARAMS, HISTORY, UNIVERSE, BEST, SUMMARY, ALLOCATION)
+
+# Classes da carteira. O % alvo começa vazio: quem decide é o dono da carteira.
+SEED_CLASSES = ["Ações Brasil", "FIIs", "Ações EUA", "ETFs EUA", "Exterior fora dos EUA", "Renda fixa em dólar"]
+# Papéis cuja classe não é a padrão do tipo (ETF = "ETFs EUA").
+SEED_CLASS_OVERRIDES = [("VXUS", "Exterior fora dos EUA"), ("VEA", "Exterior fora dos EUA"),
+                        ("VWO", "Exterior fora dos EUA"), ("BND", "Renda fixa em dólar")]
+ALLOC_HEADER = ["Alocação por classe (sem a reserva)", "Valor (R$)", "% atual", "% alvo", "Desvio (p.p.)",
+                "Falta (+) ou sobra (−) em R$"]
 
 # Candidatos iniciais por setor (editável na aba Universo). O ranking mostra os 5 melhores de cada.
 SEED_UNIVERSE = {
@@ -218,6 +226,13 @@ def ensure_tabs(sh) -> None:
             write_tab(sh, BEST, [BEST_HEADER])
         elif title == SUMMARY:
             write_tab(sh, SUMMARY, [["Resumo da carteira", "aguardando a primeira rodada"]])
+        elif title == ALLOCATION:
+            rows = [["Classe", "% alvo", "", "Papel", "Classe"]]
+            for i in range(max(len(SEED_CLASSES), len(SEED_CLASS_OVERRIDES))):
+                left = [SEED_CLASSES[i], ""] if i < len(SEED_CLASSES) else ["", ""]
+                right = list(SEED_CLASS_OVERRIDES[i]) if i < len(SEED_CLASS_OVERRIDES) else ["", ""]
+                rows.append(left + [""] + right)
+            write_tab(sh, ALLOCATION, rows)
 
 
 ANALYSIS_HEADER = ["Tipo", "Papel", "Carteira", "Preço", "Bazin", "Graham", "Gordon", "Referência",
@@ -423,6 +438,23 @@ def write_best(sh, best: list[BestRow]) -> None:
     write_tab(sh, BEST, [BEST_HEADER] + [["" if v is None else v for v in r] for r in rows])
 
 
+def read_allocation(sh) -> tuple[dict[str, float], dict[str, str]]:
+    """(alvo por classe como fração, classe de cada papel que foge do padrão). Aceita 30 ou 0,30."""
+    try:
+        rows = _get(sh, ALLOCATION)[1:]
+    except Exception:
+        return {}, {}
+    targets: dict[str, float] = {}
+    classes: dict[str, str] = {}
+    for r in rows:
+        label, value = (str(r[0]).strip() if r else ""), (_num(r[1]) if len(r) > 1 else None)
+        if label and value is not None and value > 0:
+            targets[label] = value / 100 if value > 1 else value
+        if len(r) >= 5 and str(r[3]).strip() and str(r[4]).strip():
+            classes[str(r[3]).strip()] = str(r[4]).strip()
+    return targets, classes
+
+
 def write_summary(sh, s) -> dict:
     """Grava a aba Resumo e devolve onde cada bloco ficou (para a formatação e o gráfico)."""
     rows: list[list] = [["Resumo da carteira", f"Atualizado em {s.date}"], []]
@@ -436,6 +468,16 @@ def write_summary(sh, s) -> dict:
     while len(rows) < 22:  # espaço para o gráfico, que fica ao lado
         rows.append([])
     rows.append([])
+    alloc_first = alloc_rows = 0
+    allocation = getattr(s, "allocation", None) or []
+    if allocation:
+        sections.append(len(rows))
+        rows.append(list(ALLOC_HEADER))
+        alloc_first, alloc_rows = len(rows), len(allocation)
+        rows += [[a.label, a.value, a.pct, a.target, a.deviation, a.gap] for a in allocation]
+        if all(a.target is None for a in allocation):
+            rows.append(["Preencha o % alvo de cada classe na aba Alocação alvo para ver o desvio."])
+        rows.append([])
     sections.append(len(rows))
     rows.append(["Sinais de hoje", "Na carteira", "Em observação"])
     rows += [[signal, held, watch] for signal, held, watch in s.counts]
@@ -450,7 +492,7 @@ def write_summary(sh, s) -> dict:
     padded = [["" if v is None else v for v in r] + [""] * (SUMMARY_COLS - len(r)) for r in rows]
     write_tab(sh, SUMMARY, padded)
     return {"dist_first": dist_first, "dist_rows": dist_rows, "dist_total_rows": len(s.distribution),
-            "section_rows": sections,
+            "section_rows": sections, "alloc_first": alloc_first, "alloc_rows": alloc_rows,
             "lists_first": lists_first, "total_rows": len(rows)}
 
 
@@ -473,6 +515,7 @@ def build_summary_format_requests(sheet_id: int, layout: dict, chart_ids: list[i
             "fields": _mask("userEnteredFormat", "numberFormat", "horizontalAlignment")}}
 
     d, n, end = layout["dist_first"], layout["dist_rows"], max(layout["total_rows"], 200)
+    a0, an = layout.get("alloc_first", 0), layout.get("alloc_rows", 0)
     reqs: list[dict] = [{"deleteEmbeddedObject": {"objectId": cid}} for cid in chart_ids]
     reqs.append({"repeatCell": {"range": rng(0, SUMMARY_COLS, 0, end), "cell": {"userEnteredFormat": {}},
                                 "fields": "userEnteredFormat"}})  # limpa a formatação da rodada anterior
@@ -482,7 +525,8 @@ def build_summary_format_requests(sheet_id: int, layout: dict, chart_ids: list[i
         "fields": "userEnteredFormat.textFormat"}})
     for r in layout["section_rows"]:
         reqs.append({"repeatCell": {
-            "range": rng(0, SUMMARY_COLS if r >= layout["lists_first"] else 3, r, r + 1),
+            "range": rng(0, SUMMARY_COLS if r >= layout["lists_first"]
+                         else (len(ALLOC_HEADER) if r == a0 - 1 and an else 3), r, r + 1),
             "cell": {"userEnteredFormat": {
                 "backgroundColor": color((0.12, 0.23, 0.37)),
                 "textFormat": {"bold": True, "foregroundColor": color((1, 1, 1))}}},
@@ -490,6 +534,9 @@ def build_summary_format_requests(sheet_id: int, layout: dict, chart_ids: list[i
     total_row = d + len_dist(layout)
     reqs += [fmt(1, 2, d, total_row + 2, "#,##0.00"), fmt(2, 3, d, total_row, '0.0"%"'),
              fmt(3, 5, layout["lists_first"], end, "#,##0.00"), fmt(5, 6, layout["lists_first"], end, '0.0"%"')]
+    if an:
+        reqs += [fmt(1, 2, a0, a0 + an, "#,##0.00"), fmt(2, 4, a0, a0 + an, '0.0"%"'),
+                 fmt(4, 5, a0, a0 + an, "+0.0;-0.0;0.0"), fmt(5, 6, a0, a0 + an, "+#,##0.00;-#,##0.00;0.00")]
     reqs.append({"repeatCell": {
         "range": rng(0, 2, total_row, total_row + 1),
         "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},

@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from invest.data.base import normalize_ticker
 from invest.data.yahoo import YahooProvider
@@ -170,3 +171,44 @@ def test_provider_exposes_52_week_high_and_200_day_average():
 
     f = YahooProvider(ticker_factory=E).fetch("VOO", "us")
     assert (f.high_52w, f.avg_200d) == (700.5, 640.0)
+
+
+# --- crescimento de vários anos ---
+def _stmt(revenue, income, years=(2025, 2024, 2023, 2022)):
+    cols = pd.to_datetime([f"{y}-12-31" for y in years])
+    return pd.DataFrame([revenue, income], index=["Total Revenue", "Net Income"], columns=cols)
+
+
+def _with_stmt(stmt, **info):
+    class T(FakeTicker):
+        @property
+        def info(self):
+            return dict(FakeTicker.info.fget(self), **info)
+
+        income_stmt = stmt
+
+    return T
+
+
+def test_growth_comes_from_multi_year_statements_not_last_quarter():
+    stmt = _stmt([1331.0, 1210.0, 1100.0, 1000.0], [172.8, 144.0, 120.0, 100.0])  # +10% e +20% ao ano
+    f = YahooProvider(ticker_factory=_with_stmt(stmt, earningsGrowth=7.17, revenueGrowth=1.2)).fetch("PRIO3", "br")
+    assert f.revenue_growth == pytest.approx(0.10) and f.earnings_growth == pytest.approx(0.20)
+    assert f.growth_years == 3
+
+
+def test_growth_falls_back_to_quarter_when_statements_are_short_or_missing():
+    short = _stmt([1100.0, 1000.0], [120.0, 100.0], years=(2025, 2024))
+    f = YahooProvider(ticker_factory=_with_stmt(short, earningsGrowth=0.3, revenueGrowth=0.1)).fetch("X", "br")
+    assert (f.earnings_growth, f.revenue_growth, f.growth_years) == (0.3, 0.1, None)
+    f = YahooProvider(ticker_factory=_with_stmt(None, earningsGrowth=0.3, revenueGrowth=0.1)).fetch("X", "br")
+    assert (f.earnings_growth, f.revenue_growth, f.growth_years) == (0.3, 0.1, None)
+    assert f.price == 40.0  # balanço ausente não derruba o resto da coleta
+
+
+def test_multi_year_growth_skips_losses_and_nan():
+    nan = float("nan")
+    stmt = _stmt([1210.0, 1100.0, 1000.0, nan], [50.0, 20.0, -10.0, nan])
+    f = YahooProvider(ticker_factory=_with_stmt(stmt, earningsGrowth=0.3)).fetch("X", "br")
+    assert f.revenue_growth == pytest.approx(0.10) and f.growth_years == 2
+    assert f.earnings_growth is None  # saiu de prejuízo: taxa não faz sentido, e o trimestre também não entra
