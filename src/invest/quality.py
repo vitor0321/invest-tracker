@@ -98,20 +98,25 @@ def portfolio_by_sector(holdings: dict[str, float], rows, sector_of: dict[str, s
     """Valor por setor em reais. Com a cotação do dólar, o exterior entra convertido;
     sem ela, fica à parte em US$ e fora do percentual."""
     brl: dict[str, float] = {}
-    usd = 0.0
+    usd = usd_etf = 0.0
     by_ticker = {r.ticker: r for r in rows}
     for ticker, qty in holdings.items():
         r = by_ticker.get(ticker)
         if r is None or r.price is None:
             continue
         value = qty * r.price
-        if r.kind in ("eua", "etf"):
+        if r.kind == "etf":
+            usd_etf += value
+        elif r.kind == "eua":
             usd += value
         else:
             label = "FIIs" if r.kind == "fii" else sector_of.get(ticker, "Sem setor")
             brl[label] = brl.get(label, 0.0) + value
-    if usd and usd_brl:
-        brl["Exterior (EUA)"] = usd * usd_brl
+    if usd_brl:
+        if usd:
+            brl["Exterior - ações (EUA)"] = usd * usd_brl
+        if usd_etf:
+            brl["Exterior - ETFs"] = usd_etf * usd_brl
     if reserve and reserve > 0:
         brl[f"Reserva de emergência ({reserve_label})"] = reserve
     total = sum(brl.values())
@@ -119,6 +124,6 @@ def portfolio_by_sector(holdings: dict[str, float], rows, sector_of: dict[str, s
         (label, round(value, 2), round(value / total * 100, 1))
         for label, value in sorted(brl.items(), key=lambda kv: -kv[1])
     ]
-    if usd and not usd_brl:
-        out.append(("Exterior (US$)", round(usd, 2), None))
+    if (usd or usd_etf) and not usd_brl:
+        out.append(("Exterior (US$)", round(usd + usd_etf, 2), None))
     return out

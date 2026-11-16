@@ -153,7 +153,8 @@ def analyze(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool, now:
     if f.price is None:
         return row("dado_velho" if age > p.max_age_days else "sem_dados")
     if kind == "etf":
-        return row("dado_velho" if age > p.max_age_days else "neutro")
+        return row("dado_velho" if age > p.max_age_days else "neutro",
+                   notes="ETF: cesta de ações, sem preço teto. Entra no patrimônio e na distribuição.")
 
     bazin = graham = gordon = None
     pvp = dy = None

@@ -519,3 +519,8 @@ def test_new_email_groups_by_urgency_and_explains_each_change():
     assert "PEG 2,9" in html and "Referência: Bazin" in html
     assert "docs.google.com/spreadsheets/d/" in html
     assert "1 oportunidade" in html and "1 caro" in html
+
+
+def test_etf_row_explains_why_it_has_no_reference():
+    row = analyze("VOO", "etf", good("VOO"), PARAMS, held=True, now=NOW)
+    assert row.signal == "neutro" and "ETF" in row.notes
