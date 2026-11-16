@@ -389,10 +389,10 @@ def test_low_or_no_dividend_stock_gets_no_price_ceiling():
     f.annual_dividends = [0.5] * 5  # 1% ao ano
     row = analyze("WEGE3", "acao_br", f, PARAMS, held=True, now=NOW)
     assert row.signal == "neutro" and row.reference is None
-    assert "pouco ou nenhum dividendo" in row.notes
+    assert "sem dado de crescimento" in row.notes
     f.annual_dividends = []
     row = analyze("NVDA", "eua", f, PARAMS, held=True, now=NOW)
-    assert row.signal == "neutro" and "pouco ou nenhum dividendo" in row.notes
+    assert row.signal == "neutro" and "sem dado de crescimento" in row.notes
 
 
 def test_fii_above_book_value_is_not_opportunity():
@@ -418,3 +418,73 @@ def test_partial_quality_scores_above_total_failure():
     a = analyze("ITUB4", "acao_br", one, PARAMS, held=False, now=NOW).score
     b = analyze("ITUB4", "acao_br", three, PARAMS, held=False, now=NOW).score
     assert a > b
+
+
+# --- trilho de crescimento (paga menos de 2% em dividendos) ---
+def grower(ticker="GOOGL", price=100.0, eps=5.0, eg=0.20, rg=0.10, roe=0.25, nde=0.5):
+    f = good(ticker, price=price)
+    f.annual_dividends, f.eps, f.bvps = [], eps, 20.0
+    f.earnings_growth, f.revenue_growth, f.roe, f.net_debt_ebitda = eg, rg, roe, nde
+    return f
+
+
+def test_growth_stock_uses_graham_growth_formula_and_shows_peg():
+    row = analyze("GOOGL", "eua", grower(), PARAMS, held=False, now=NOW)
+    assert row.reference == pytest.approx(5.0 * (8.5 + 2 * 10))  # g = menor entre lucro e receita
+    assert row.signal == "oportunidade" and row.score is not None
+    assert "crescimento" in row.notes and "PEG 2,0" in row.notes
+
+
+def test_growth_rate_is_capped_and_floored():
+    assert analyze("X", "eua", grower(eg=0.5, rg=0.5), PARAMS, False, NOW).reference == pytest.approx(5 * 38.5)
+    assert analyze("X", "eua", grower(eg=-0.2, rg=0.05), PARAMS, False, NOW).reference == pytest.approx(5 * 8.5)
+
+
+def test_growth_reference_shrinks_with_each_country_interest_rate():
+    params = replace(PARAMS, us_risk_free=0.088, risk_free=0.132)
+    assert analyze("X", "eua", grower(), params, False, NOW).reference == pytest.approx(142.5 / 2)
+    assert analyze("WEGE3", "acao_br", grower("WEGE3"), params, False, NOW).reference == pytest.approx(142.5 / 3)
+
+
+def test_growth_stock_with_loss_or_shrinking_revenue_is_risk():
+    row = analyze("X", "eua", grower(eps=-1.0), PARAMS, held=True, now=NOW)
+    assert row.signal == "risco" and "prejuízo" in row.notes
+    row = analyze("X", "eua", grower(rg=-0.2), PARAMS, held=True, now=NOW)
+    assert row.signal == "risco" and "receita caiu" in row.notes
+
+
+def test_growth_stock_with_low_roe_is_not_opportunity():
+    row = analyze("X", "eua", grower(roe=0.08), PARAMS, held=False, now=NOW)
+    assert row.signal == "neutro" and "ROE 8,0%" in row.notes
+
+
+def test_growth_stock_held_above_reference_is_expensive():
+    row = analyze("X", "eua", grower(price=300.0), PARAMS, held=True, now=NOW)
+    assert row.signal == "caro" and row.slack_pct == -52.5
+
+
+def test_growth_unit_has_no_reference():
+    row = analyze("XXXX11", "acao_br", grower("XXXX11"), PARAMS, held=True, now=NOW)
+    assert row.reference is None and row.signal == "neutro"
+
+
+def test_fii_without_vpa_tells_user_what_to_fill():
+    f = good("BCIA11", price=81.0)
+    f.bvps = None
+    row = analyze("BCIA11", "fii", f, PARAMS, held=True, now=NOW)
+    assert row.signal == "sem_dados" and "preencha o VPA manual" in row.notes
+
+
+def test_build_best_fetches_us_tickers_in_the_us_market():
+    from invest.run import build_best
+
+    seen = []
+
+    class Rec:
+        def fetch(self, ticker, market):
+            seen.append((ticker, market))
+            return good(ticker)
+
+    rows = [AR("eua", "GOOGL", 300.0, None, None, None, None, None, "neutro", "yahoo", "d", held=True)]
+    build_best([("EUA", "GOOGL"), ("Financeiro", "ITUB4"), ("EUA", "MSFT")], {"GOOGL": 1}, rows, PARAMS, Rec())
+    assert seen == [("GOOGL", "us"), ("ITUB4", "br"), ("MSFT", "us")]  # setor "EUA" também vale

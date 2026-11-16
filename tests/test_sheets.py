@@ -241,8 +241,8 @@ def test_ensure_tabs_seeds_universe_with_8_sectors_of_at_most_7():
     sectors = {}
     for sector, ticker in universe:
         sectors.setdefault(sector, []).append(ticker)
-    assert len(sectors) == 8
-    assert all(1 <= len(v) <= 7 for v in sectors.values())
+    assert len(sectors) == 9 and "EUA" in sectors
+    assert all(1 <= len(v) <= 7 for k, v in sectors.items() if k != "EUA")
     assert len({t for _, t in universe}) == len(universe)  # sem papel repetido
     assert sh.tabs["Universo"].values[0] == ["Setor", "Papel"]
     assert sh.tabs["Melhores por setor"].values[0][:3] == ["Setor", "Pos", "Papel"]
@@ -331,3 +331,13 @@ def test_new_rate_and_fii_params_have_defaults_and_can_be_overridden():
     _set_param(sh, "eua_treasury_10a", 0.04)
     p = read_params(sh)
     assert p.fii_min_dy == 0.10 and p.us_required_return == pytest.approx(0.085)
+
+
+def test_growth_track_params():
+    sh = make_sheet()
+    ensure_tabs(sh)
+    p = read_params(sh)
+    assert p.risk_free == pytest.approx(1.074 * 1.04 - 1) and p.us_risk_free == pytest.approx(0.049)
+    assert p.growth_cap == 0.15 and p.min_roe == 0.15
+    _set_param(sh, "crescimento_max", 0.10)
+    assert read_params(sh).growth_cap == 0.10

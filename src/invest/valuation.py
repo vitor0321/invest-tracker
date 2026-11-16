@@ -31,6 +31,16 @@ def gordon_price(
     return next_dividend / (required_return - g)
 
 
+GRAHAM_BASE_YIELD = 0.044  # juro dos títulos AAA quando Graham publicou a fórmula
+
+
+def graham_growth_price(eps: float, growth: float, risk_free: float) -> float | None:
+    """Fórmula de crescimento de Graham: LPA × (8,5 + 2g) × 4,4 / juro, com g em pontos percentuais."""
+    if eps <= 0 or risk_free <= 0:
+        return None
+    return eps * (8.5 + 2 * growth * 100) * GRAHAM_BASE_YIELD / risk_free
+
+
 def reference_price(prices: list[float | None]) -> float | None:
     valid = [p for p in prices if p is not None]
     return min(valid) if valid else None

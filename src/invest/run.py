@@ -15,7 +15,7 @@ from invest.sheets import AnalysisRow, Params, SignalChange, WatchItem
 from invest.valuation import (
     DIVIDEND_CUT_TOLERANCE,
     FiiMetrics, QualityResult, bazin_ceiling, check_quality, count_cuts, fii_quality,
-    gordon_price, graham_fair_price, median, reference_price,
+    gordon_price, graham_fair_price, graham_growth_price, median, reference_price,
 )
 
 log = logging.getLogger("invest")
@@ -23,7 +23,7 @@ SILENT_FIRST = {"neutro", "sem_dados"}
 VALID_KINDS = {"acao_br", "fii", "eua", "etf"}
 GROWTH_CAP = 0.06
 MIN_DIVIDEND_YIELD = 0.02  # abaixo disso, métodos de dividendos não dizem nada sobre o preço
-LOW_DIVIDEND_NOTE = "paga pouco ou nenhum dividendo: preço teto por dividendos não se aplica"
+REVENUE_DROP_RISK = -0.10
 
 
 def detect_changes(previous: dict[str, str], current: dict[str, str], date: str) -> list[SignalChange]:
@@ -68,6 +68,8 @@ def _notes(kind: str, f: Fundamentals, p: Params, quality: QualityResult, divide
             fails.append("sem VPA (preencha o VPA manual)" if pvp is None else f"P/VP {_pt(pvp, 2)}")
         elif code == "dy":
             fails.append("DY sem dado" if dy is None else f"DY {_pt(dy * 100)}%")
+        elif code == "sem_dados":
+            fails.append("sem VPA (preencha o VPA manual)")
         elif code == "regularidade":
             fails.append(f"só {f.months_paid_12m} de 12 meses com rendimento")
         elif code == "queda_rendimento":
@@ -92,6 +94,48 @@ def _notes(kind: str, f: Fundamentals, p: Params, quality: QualityResult, divide
             if graham is not None and f.price is not None and f.price > graham:
                 parts.append("acima do Graham")
     return " | ".join(parts)
+
+
+def _growth_track(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool, age: int, row):
+    """Paga menos de 2% em dividendos: preço pela fórmula de crescimento de Graham."""
+    label = "Trilho crescimento (paga pouco dividendo)"
+    stale = age > p.max_age_days
+    unit = kind == "acao_br" and ticker.endswith("11")
+    rates = [g for g in (f.earnings_growth, f.revenue_growth) if g is not None]
+    if f.eps is not None and f.eps <= 0 and not unit:
+        return row("dado_velho" if stale else "risco", notes=f"{label} | Reprovou: prejuízo nos últimos 12 meses")
+    if unit or f.eps is None or not rates:
+        missing = "unit sem lucro por unit" if unit else ("sem lucro por ação" if f.eps is None
+                                                           else "sem dado de crescimento")
+        return row("dado_velho" if stale else "neutro", notes=f"{label} | {missing}: sem preço de referência")
+    growth = max(0.0, min(min(rates), p.growth_cap))  # o menor entre lucro e receita, limitado
+    reference = graham_growth_price(f.eps, growth, p.us_risk_free if kind == "eua" else p.risk_free)
+    graham = graham_fair_price(f.eps, f.bvps, p.graham_factor) if f.bvps else None
+    financial = f.sector == "Financial Services"
+    fails: list[str] = []
+    if f.roe is None or f.roe < p.min_roe:
+        fails.append("ROE sem dado" if f.roe is None else f"ROE {_pt(f.roe * 100)}%")
+    if not financial and (f.net_debt_ebitda is None or f.net_debt_ebitda > p.max_leverage):
+        fails.append("dívida/EBITDA sem dado" if f.net_debt_ebitda is None
+                     else f"dívida/EBITDA {_pt(f.net_debt_ebitda)}")
+    shrinking = f.revenue_growth is not None and f.revenue_growth < REVENUE_DROP_RISK
+    if shrinking:
+        fails.append(f"receita caiu {_pt(-f.revenue_growth * 100)}%")
+    elif f.revenue_growth is not None and f.revenue_growth < 0:
+        fails.append("receita em queda")
+    checks = 3 - int(financial)
+    quality = QualityResult(not fails, fails)
+    signal = classify(f.price, reference, quality, shrinking, None, age, held, p.max_age_days, p.max_payout)
+    regularity = len([g for g in rates if g > 0]) / len(rates)
+    score = compute_score(f.price, reference, max(0.0, 1 - len(fails) / checks), regularity, p.weights)
+    slack = round((reference - f.price) / f.price * 100, 1) if reference else None
+    parts = [label]
+    if fails:
+        parts.append("Reprovou: " + "; ".join(fails))
+    parts.append(f"Referência: Graham de crescimento (g {_pt(growth * 100)}%)")
+    if growth > 0:
+        parts.append(f"PEG {_pt(f.price / f.eps / (growth * 100))}")
+    return row(signal, None, graham, None, slack, score, reference, " | ".join(parts))
 
 
 def analyze(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool, now: datetime,
@@ -131,7 +175,7 @@ def analyze(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool, now:
         divs = f.annual_dividends[-5:]
         if not divs or (sum(divs) / len(divs)) / f.price < MIN_DIVIDEND_YIELD:
             # empresa de crescimento: Bazin e Gordon dariam um teto sem sentido
-            return row("dado_velho" if age > p.max_age_days else "neutro", notes=LOW_DIVIDEND_NOTE)
+            return _growth_track(ticker, kind, f, p, held, age, row)
         us = kind == "eua"
         required_return = p.us_required_return if us else p.required_return
         inflation = p.us_inflation if us else p.inflation
@@ -219,9 +263,11 @@ class CachingProvider:
 def build_best(universe: list[tuple[str, str]], holdings: dict[str, float], rows: list[AnalysisRow],
                params: Params, provider):
     data: dict[str, Fundamentals] = {}
-    for _, ticker in universe:
+    kinds = {r.ticker: r.kind for r in rows}
+    for sector, ticker in universe:
+        us = kinds.get(ticker) in ("eua", "etf") or sector.strip().upper() == "EUA"
         try:
-            data[ticker] = provider.fetch(ticker, "br")
+            data[ticker] = provider.fetch(ticker, "us" if us else "br")
         except Exception as exc:
             log.warning("falha ao buscar %s: %s", ticker, exc)
     best = rank_by_sector(universe, data, set(holdings), params.quality_weights)

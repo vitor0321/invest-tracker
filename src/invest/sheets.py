@@ -24,6 +24,7 @@ SEED_UNIVERSE = {
     "Saúde": ["RDOR3", "HAPV3", "FLRY3", "HYPE3", "ODPV3", "MATD3", "PNVL3"],
     "Indústria, transporte e agro": ["WEGE3", "RENT3", "EMBR3", "RAIL3", "MOTV3", "SLCE3", "AGRO3"],
     "Telecom e tecnologia": ["VIVT3", "TIMS3", "TOTS3", "LWSA3", "INTB3", "POSI3"],
+    "EUA": ["GOOGL", "AAPL", "META", "AMZN", "NVDA", "V", "FCX", "LLY", "COST", "JNJ", "KO", "PG"],
 }
 BEST_HEADER = ["Setor", "Pos", "Papel", "Carteira", "Nota", "ROE %", "Margem %", "Cresc. lucro %",
                "Cresc. receita %", "Dív/EBITDA", "DY 12m %", "Anos sem corte", "Motivo"]
@@ -41,6 +42,8 @@ DEFAULT_PARAMS = [
     ("fii_pvp_max", 1.0),          # FII só é oportunidade até esse P/VP
     ("fii_dy_min", ""),            # vazio = ntnb_real + 1 ponto; número = sobrescreve
     ("cortes_max", 1),             # cortes de dividendo (>20%) tolerados em 5 anos
+    ("crescimento_max", 0.15),     # trilho de crescimento: teto do crescimento na fórmula de Graham
+    ("roe_min", 0.15),             # trilho de crescimento: ROE mínimo
     ("graham_fator", 22.5),
     ("payout_max", 1.0),
     ("divida_ebitda_max", 3.0),
@@ -99,6 +102,10 @@ class Params:
     fii_max_pvp: float = 1.0
     fii_min_dy: float = 0.08
     max_cuts: int = 1                 # cortes de dividendo tolerados em 5 anos
+    risk_free: float = 0.044          # juro nominal longo do Brasil (trilho de crescimento)
+    us_risk_free: float = 0.044       # título de 10 anos dos EUA
+    growth_cap: float = 0.15          # crescimento máximo aceito na fórmula de Graham
+    min_roe: float = 0.15
 
 
 @dataclass
@@ -323,6 +330,10 @@ def read_params(sh) -> Params:
         fii_max_pvp=rate("fii_pvp_max", 1.0),
         fii_min_dy=_num(kv.get("fii_dy_min")) or (ntnb_real + 0.01),
         max_cuts=int(rate("cortes_max", 1)),
+        risk_free=(1 + ntnb_real) * (1 + inflation) - 1,
+        us_risk_free=rate("eua_treasury_10a", 0.049),
+        growth_cap=rate("crescimento_max", 0.15),
+        min_roe=rate("roe_min", 0.15),
         types=types,
         vpa_manual={
             str(r[3]).strip(): v
