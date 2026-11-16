@@ -124,7 +124,7 @@ def test_i2_no_dividend_history_means_no_score():
     f = good()
     f.annual_dividends = []
     row = analyze("AXIA3", "acao_br", f, PARAMS, held=True, now=NOW)
-    assert row.score is None and row.signal == "sem_dados"
+    assert row.score is None and row.signal == "neutro"  # sem dividendos: sem teto, não é falha
 
 
 def test_i3_unknown_type_is_sem_tipo_and_case_insensitive():
@@ -142,7 +142,7 @@ def test_i4_no_bazin_for_us_stocks():
 
 def test_i5_gordon_growth_is_capped_before_projection():
     f = good()
-    f.annual_dividends = [0.1, 1.0]
+    f.annual_dividends = [0.1, 1.0, 1.0]
     row = analyze("ITUB4", "acao_br", f, PARAMS, held=False, now=NOW)
     assert row.gordon == pytest.approx(26.5)
 
@@ -215,11 +215,11 @@ def test_small_dividend_dip_is_not_risk_but_a_big_cut_is():
 
 def test_row_exposes_reference_for_stocks_and_fiis():
     r1 = analyze("ITUB4", "acao_br", good(), PARAMS, held=False, now=NOW)
-    assert r1.reference == pytest.approx(min(r1.bazin, r1.graham, r1.gordon))
+    assert r1.reference == pytest.approx(min(r1.bazin, r1.gordon))
     f = good("MXRF11", price=8.75)
     f.bvps, f.dividend_12m, f.months_paid_12m = 9.926, 1.19, 12
     r2 = analyze("MXRF11", "fii", f, PARAMS, held=False, now=NOW)
-    assert r2.reference == pytest.approx(9.926 * 1.10)
+    assert r2.reference == pytest.approx(9.926)
 
 
 def test_email_shows_reference_for_fii():
@@ -273,12 +273,13 @@ def test_run_once_passes_html_to_send():
 
 def test_notes_explain_quality_failures_and_reference_method():
     f = good("ITUB4", price=25.0)
-    f.payout, f.net_debt_ebitda, f.years_without_cut = 1.34, None, 2
+    f.payout, f.eps, f.net_debt_ebitda = 1.34, 2.0, None
+    f.annual_dividends = [3.0, 2.0, 3.0, 2.0, 3.0, 3.0]
     note = analyze("ITUB4", "acao_br", f, PARAMS, held=False, now=NOW).notes
     assert "payout 134%" in note
     assert "dívida/EBITDA sem dado" in note
-    assert "2 ano(s) sem corte" in note
-    assert "Referência: Gordon" in note
+    assert "2 cortes de dividendo" in note
+    assert "Referência: Bazin" in note
 
 
 def test_notes_flag_dividend_cut_and_leverage_value():
@@ -294,7 +295,7 @@ def test_notes_for_clean_fii_and_failing_fii():
     f = good("MXRF11", price=10.0)
     f.bvps, f.eps = 10.0, None
     f.dividend_12m, f.months_paid_12m, f.last_dividend = 1.2, 12, 0.10
-    assert analyze("MXRF11", "fii", f, PARAMS, held=False, now=NOW).notes == "Referência: VPA × 1,10"
+    assert analyze("MXRF11", "fii", f, PARAMS, held=False, now=NOW).notes == "Referência: VPA × 1,00"
     f.price, f.dividend_12m = 12.0, 0.5
     note = analyze("MXRF11", "fii", f, PARAMS, held=False, now=NOW).notes
     assert "P/VP 1,20" in note and "DY 4,2%" in note
@@ -333,3 +334,87 @@ def test_build_best_survives_provider_errors_and_marks_holdings():
     best, portfolio = build_best(universe, {"ITUB4": 10}, rows, PARAMS, Flaky())
     assert [(b.ticker, b.position, b.held) for b in best] == [("ITUB4", 1, True), ("BOOM3", None, False)]
     assert portfolio == [("Financeiro", 400.0, 100.0)]
+
+
+# --- calibragem média (revisão das regras) ---
+from dataclasses import replace
+
+
+def test_unit_is_not_flagged_by_per_share_payout():
+    f = good("TAEE11")
+    f.payout = 2.5  # dividendo por unit dividido por lucro por ação
+    row = analyze("TAEE11", "acao_br", f, PARAMS, held=False, now=NOW)
+    assert row.signal == "oportunidade" and "payout" not in row.notes
+
+
+def test_us_stock_uses_us_rates_and_reference_ignores_graham():
+    params = replace(PARAMS, us_required_return=0.09, us_inflation=0.025)
+    row = analyze("JNJ", "eua", good("JNJ"), params, held=False, now=NOW)
+    assert row.gordon == pytest.approx(3.0 * 1.025 / 0.065)
+    assert row.graham is not None and row.reference == pytest.approx(row.gordon)
+
+
+def test_gordon_growth_never_below_inflation():
+    params = replace(PARAMS, inflation=0.04, required_return=0.14)
+    row = analyze("ITUB4", "acao_br", good(), params, held=False, now=NOW)
+    assert row.gordon == pytest.approx(3.0 * 1.04 / 0.10)
+
+
+def test_extraordinary_dividend_year_does_not_inflate_gordon_or_flag_risk():
+    f = good(price=9.0)
+    f.annual_dividends = [1.0, 1.0, 1.0, 1.0, 5.0]
+    f.payout = 1.6  # 12 meses com dividendo extraordinário
+    row = analyze("ITUB4", "acao_br", f, PARAMS, held=False, now=NOW)
+    assert row.gordon == pytest.approx(10.0)
+    assert row.signal == "oportunidade"
+
+
+def test_year_after_extraordinary_dividend_is_not_a_cut():
+    f = good()
+    f.annual_dividends = [3.0, 3.0, 3.0, 9.0, 3.0]
+    assert analyze("ITUB4", "acao_br", f, PARAMS, held=False, now=NOW).signal != "risco"
+
+
+def test_one_cut_in_five_years_still_passes_but_two_do_not():
+    f = good()
+    f.annual_dividends = [3.0, 3.0, 2.0, 3.0, 3.0, 3.0]
+    assert analyze("ITUB4", "acao_br", f, PARAMS, held=False, now=NOW).signal == "oportunidade"
+    f.annual_dividends = [3.0, 2.0, 3.0, 2.0, 3.0, 3.0]
+    row = analyze("ITUB4", "acao_br", f, PARAMS, held=False, now=NOW)
+    assert row.signal == "neutro" and "2 cortes" in row.notes
+
+
+def test_low_or_no_dividend_stock_gets_no_price_ceiling():
+    f = good("WEGE3", price=50.0)
+    f.annual_dividends = [0.5] * 5  # 1% ao ano
+    row = analyze("WEGE3", "acao_br", f, PARAMS, held=True, now=NOW)
+    assert row.signal == "neutro" and row.reference is None
+    assert "pouco ou nenhum dividendo" in row.notes
+    f.annual_dividends = []
+    row = analyze("NVDA", "eua", f, PARAMS, held=True, now=NOW)
+    assert row.signal == "neutro" and "pouco ou nenhum dividendo" in row.notes
+
+
+def test_fii_above_book_value_is_not_opportunity():
+    f = good("HGLG11", price=105.0)
+    f.bvps, f.eps = 100.0, None
+    f.dividend_12m, f.months_paid_12m, f.last_dividend = 12.0, 12, 1.0
+    row = analyze("HGLG11", "fii", f, PARAMS, held=False, now=NOW)
+    assert row.reference == pytest.approx(100.0) and row.signal == "neutro"
+    assert "P/VP 1,05" in row.notes
+
+
+def test_slack_is_upside_to_reference_over_price():
+    row = analyze("ITUB4", "acao_br", good(price=60.0), PARAMS, held=True, now=NOW)
+    assert row.reference == pytest.approx(30.0) and row.slack_pct == -50.0
+
+
+def test_partial_quality_scores_above_total_failure():
+    one = good(price=60.0)
+    one.net_debt_ebitda = 5.0
+    three = good(price=60.0)
+    three.net_debt_ebitda, three.payout, three.eps = 5.0, 1.5, 1.0
+    three.annual_dividends = [3.0, 2.0, 3.0, 2.0, 3.0, 3.0]
+    a = analyze("ITUB4", "acao_br", one, PARAMS, held=False, now=NOW).score
+    b = analyze("ITUB4", "acao_br", three, PARAMS, held=False, now=NOW).score
+    assert a > b

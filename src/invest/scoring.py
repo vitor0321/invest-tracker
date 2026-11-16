@@ -16,7 +16,7 @@ def _clamp(x: float) -> float:
 def compute_score(
     price: float,
     reference: float | None,
-    quality_passed: bool,
+    quality: float,  # fração das checagens de qualidade aprovadas (True/False também serve)
     dividend_regularity: float,
     weights: dict[str, float],
 ) -> int | None:
@@ -25,7 +25,7 @@ def compute_score(
     slack = _clamp((reference - price) / reference)
     total = (
         weights["folga"] * slack
-        + weights["qualidade"] * (1.0 if quality_passed else 0.0)
+        + weights["qualidade"] * _clamp(float(quality))
         + weights["regularidade"] * _clamp(dividend_regularity)
     )
     return round(100 * total)

@@ -34,9 +34,9 @@ def test_reference_price():
 
 
 def test_quality():
-    assert check_quality(0.5, 2.0, 6).passed is True
-    assert check_quality(1.2, 2.0, 6).failures == ["payout"]
-    assert check_quality(None, 2.0, 6).failures == ["payout"]
+    assert check_quality(0.5, 2.0, 0).passed is True
+    assert check_quality(1.2, 2.0, 0).failures == ["payout"]
+    assert check_quality(None, 2.0, 0).failures == ["payout"]
 
 
 def test_fii_quality():
@@ -52,5 +52,25 @@ def test_fii_quality_flags_last_payment_drop_over_20_percent():
 
 
 def test_check_quality_can_skip_leverage_for_financials():
-    assert check_quality(0.5, None, 6).failures == ["divida"]
-    assert check_quality(0.5, None, 6, check_leverage=False).passed is True
+    assert check_quality(0.5, None, 0).failures == ["divida"]
+    assert check_quality(0.5, None, 0, check_leverage=False).passed is True
+
+
+# --- calibragem média ---
+def test_quality_tolerates_one_dividend_cut_in_five_years():
+    assert check_quality(0.5, 2.0, 1).passed is True
+    assert check_quality(0.5, 2.0, 2).failures == ["cortes"]
+    assert check_quality(0.5, 2.0, None).failures == ["historico_curto"]
+
+
+def test_quality_can_skip_payout_for_units():
+    assert check_quality(None, 2.0, 0, check_payout=False).passed is True
+
+
+def test_count_cuts_needs_four_years_and_counts_drops_over_20_percent():
+    from invest.valuation import count_cuts
+
+    assert count_cuts([3.0, 3.0, 2.0, 3.0, 3.0, 3.0]) == 1
+    assert count_cuts([3.0, 2.0, 3.0, 2.0, 3.0, 3.0]) == 2
+    assert count_cuts([3.0, 2.9, 2.8, 2.7]) == 0
+    assert count_cuts([3.0, 3.0, 3.0]) is None

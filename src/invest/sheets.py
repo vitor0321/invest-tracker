@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 
 from invest.quality import QUALITY_WEIGHTS, BestRow
@@ -34,6 +35,12 @@ DEFAULT_PARAMS = [
     ("premio_risco", 0.02),        # prêmio exigido da bolsa sobre a renda fixa
     ("retorno_exigido", ""),       # vazio = calculado dos juros; número = sobrescreve
     ("dy_alvo", ""),               # vazio = retorno exigido - inflação; número = sobrescreve
+    ("eua_treasury_10a", 0.049),   # título de 10 anos dos EUA; atualizar de vez em quando
+    ("eua_premio_risco", 0.045),   # prêmio da bolsa americana sobre o Treasury
+    ("eua_inflacao", 0.025),
+    ("fii_pvp_max", 1.0),          # FII só é oportunidade até esse P/VP
+    ("fii_dy_min", ""),            # vazio = ntnb_real + 1 ponto; número = sobrescreve
+    ("cortes_max", 1),             # cortes de dividendo (>20%) tolerados em 5 anos
     ("graham_fator", 22.5),
     ("payout_max", 1.0),
     ("divida_ebitda_max", 3.0),
@@ -86,6 +93,12 @@ class Params:
     types: dict[str, str]
     vpa_manual: dict[str, float] = field(default_factory=dict)
     quality_weights: dict[str, float] = field(default_factory=lambda: dict(QUALITY_WEIGHTS))
+    inflation: float = 0.0            # piso de crescimento no Gordon (Brasil)
+    us_required_return: float = 0.10  # retorno exigido das ações dos EUA, em dólar
+    us_inflation: float = 0.0
+    fii_max_pvp: float = 1.0
+    fii_min_dy: float = 0.08
+    max_cuts: int = 1                 # cortes de dividendo tolerados em 5 anos
 
 
 @dataclass
@@ -133,6 +146,24 @@ def read_holdings(sh) -> dict[str, float]:
         qty = _num(r[1])
         if qty and qty > 0:
             out[str(r[0]).strip()] = qty
+    for ticker, qty in _cf_detalhe_positions(sh).items():
+        out.setdefault(ticker, qty)  # a aba Carteira manda; CF detalhe só completa (EUA, etc.)
+    return out
+
+
+def _cf_detalhe_positions(sh) -> dict[str, float]:
+    """Lê (sem nunca escrever) Cod e Qtde. da aba CF detalhe: colunas C e E."""
+    try:
+        rows = sh.worksheet("CF detalhe").get("A1:E", value_render_option="UNFORMATTED_VALUE")
+    except Exception:
+        return {}
+    out: dict[str, float] = {}
+    for r in rows:
+        if len(r) < 5:
+            continue
+        ticker, qty = str(r[2]).strip(), _num(r[4])
+        if re.fullmatch(r"[A-Z][A-Z0-9]{0,5}", ticker) and qty and qty > 0:
+            out[ticker] = qty
     return out
 
 
@@ -286,6 +317,12 @@ def read_params(sh) -> Params:
         },
         email=str(kv["email"]),
         quality_weights={k: rate(f"q_peso_{k}", v) for k, v in QUALITY_WEIGHTS.items()},
+        inflation=inflation,
+        us_required_return=rate("eua_treasury_10a", 0.049) + rate("eua_premio_risco", 0.045),
+        us_inflation=rate("eua_inflacao", 0.025),
+        fii_max_pvp=rate("fii_pvp_max", 1.0),
+        fii_min_dy=_num(kv.get("fii_dy_min")) or (ntnb_real + 0.01),
+        max_cuts=int(rate("cortes_max", 1)),
         types=types,
         vpa_manual={
             str(r[3]).strip(): v

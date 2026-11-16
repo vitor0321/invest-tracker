@@ -46,22 +46,39 @@ def _result(failures: list[str]) -> QualityResult:
     return QualityResult(passed=not failures, failures=failures)
 
 
+def median(values: list[float]) -> float:
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    return ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+
+
+def count_cuts(annual: list[float], tolerance: float = DIVIDEND_CUT_TOLERANCE) -> int | None:
+    """Quedas maiores que a tolerância nas últimas 5 comparações ano a ano. None = histórico curto."""
+    if len(annual) < 4:
+        return None
+    pairs = list(zip(annual[:-1], annual[1:]))[-5:]
+    return sum(1 for prev, cur in pairs if cur < prev * (1 - tolerance))
+
+
 def check_quality(
     payout: float | None,
     net_debt_ebitda: float | None,
-    years_without_cut: int,
+    dividend_cuts: int | None,
     max_payout: float = 1.0,
     max_leverage: float = 3.0,
-    min_years: int = 5,
+    max_cuts: int = 1,
     check_leverage: bool = True,
+    check_payout: bool = True,
 ) -> QualityResult:
     failures: list[str] = []
-    if payout is None or payout > max_payout:
+    if check_payout and (payout is None or payout > max_payout):
         failures.append("payout")
     if check_leverage and (net_debt_ebitda is None or net_debt_ebitda > max_leverage):
         failures.append("divida")
-    if years_without_cut < min_years:
-        failures.append("anos_sem_corte")
+    if dividend_cuts is None:
+        failures.append("historico_curto")
+    elif dividend_cuts > max_cuts:
+        failures.append("cortes")
     return _result(failures)
 
 
@@ -76,7 +93,7 @@ class FiiMetrics:
 
 def fii_quality(
     m: FiiMetrics,
-    max_pvp: float = 1.10,
+    max_pvp: float = 1.0,
     min_dy: float = 0.08,
     min_months: int = 11,
     max_drop: float = DIVIDEND_CUT_TOLERANCE,

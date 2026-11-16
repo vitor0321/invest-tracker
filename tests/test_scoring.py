@@ -34,3 +34,7 @@ def test_precedence():
     assert classify(**kw(data_age_days=11, dividend_cut=True)) == "dado_velho"
     assert classify(**kw(reference=None, data_age_days=11)) == "dado_velho"
     assert classify(**kw(dividend_cut=True)) == "risco"
+
+
+def test_score_accepts_partial_quality():
+    assert compute_score(60, 50, 0.5, 1.0, W) == 35

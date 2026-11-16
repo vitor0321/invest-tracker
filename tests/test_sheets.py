@@ -297,3 +297,37 @@ def test_format_best_resets_old_rules_and_sets_filter_on_ranking_only():
     assert kinds[:2] == ["deleteConditionalFormatRule"] * 2
     flt = next(q["setBasicFilter"]["filter"]["range"] for q in reqs if "setBasicFilter" in q)
     assert (flt["startColumnIndex"], flt["endColumnIndex"]) == (0, 13)
+
+
+# --- calibragem média ---
+def test_read_holdings_adds_positions_only_listed_in_cf_detalhe():
+    sh = make_sheet()
+    sh.tabs["CF detalhe"].values = [
+        ["CNPJ", "NOME", "Cod", "Preço/m", "Qtde.", "Valor"],
+        ["00", "Banco do Brasil", "BBAS3", 16.9, 999],
+        ["", "", "FIIs"],
+        ["", "ALPHABET INC.", "GOOGL", 115.15, 1.6802],
+        ["", "Visa", "V", 326.5, 1.0],
+        ["", "Zerada", "XPTO3", 10.0, 0],
+        ["", "", "", "", ""],
+    ]
+    assert read_holdings(sh) == {"AGRO3": 22.0, "BBAS3": 259.0, "GOOGL": 1.6802, "V": 1.0}
+
+
+def test_read_holdings_survives_missing_cf_detalhe():
+    sh = make_sheet()
+    del sh.tabs["CF detalhe"]
+    assert read_holdings(sh) == {"AGRO3": 22.0, "BBAS3": 259.0}
+
+
+def test_new_rate_and_fii_params_have_defaults_and_can_be_overridden():
+    sh = make_sheet()
+    ensure_tabs(sh)
+    p = read_params(sh)
+    assert p.inflation == 0.04 and p.us_inflation == 0.025 and p.max_cuts == 1
+    assert p.us_required_return == pytest.approx(0.094)
+    assert p.fii_max_pvp == 1.0 and p.fii_min_dy == pytest.approx(0.084)
+    _set_param(sh, "fii_dy_min", 0.10)
+    _set_param(sh, "eua_treasury_10a", 0.04)
+    p = read_params(sh)
+    assert p.fii_min_dy == 0.10 and p.us_required_return == pytest.approx(0.085)

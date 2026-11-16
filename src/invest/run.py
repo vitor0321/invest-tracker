@@ -14,14 +14,16 @@ from invest.scoring import classify, compute_score
 from invest.sheets import AnalysisRow, Params, SignalChange, WatchItem
 from invest.valuation import (
     DIVIDEND_CUT_TOLERANCE,
-    FiiMetrics, QualityResult, bazin_ceiling, check_quality, fii_quality,
-    gordon_price, graham_fair_price, reference_price,
+    FiiMetrics, QualityResult, bazin_ceiling, check_quality, count_cuts, fii_quality,
+    gordon_price, graham_fair_price, median, reference_price,
 )
 
 log = logging.getLogger("invest")
 SILENT_FIRST = {"neutro", "sem_dados"}
 VALID_KINDS = {"acao_br", "fii", "eua", "etf"}
 GROWTH_CAP = 0.06
+MIN_DIVIDEND_YIELD = 0.02  # abaixo disso, métodos de dividendos não dizem nada sobre o preço
+LOW_DIVIDEND_NOTE = "paga pouco ou nenhum dividendo: preço teto por dividendos não se aplica"
 
 
 def detect_changes(previous: dict[str, str], current: dict[str, str], date: str) -> list[SignalChange]:
@@ -50,16 +52,18 @@ def _pt(x: float, digits: int = 1) -> str:
 
 def _notes(kind: str, f: Fundamentals, p: Params, quality: QualityResult, dividend_cut: bool,
            pvp: float | None, dy: float | None, age: int, methods: dict[str, float | None],
-           reference: float | None) -> str:
+           reference: float | None, payout: float | None = None, cuts: int | None = None) -> str:
     fails: list[str] = []
     for code in quality.failures:
         if code == "payout":
-            fails.append("payout sem dado" if f.payout is None else f"payout {f.payout * 100:.0f}%")
+            fails.append("payout sem dado" if payout is None else f"payout {payout * 100:.0f}%")
         elif code == "divida":
             fails.append("dívida/EBITDA sem dado" if f.net_debt_ebitda is None
                          else f"dívida/EBITDA {_pt(f.net_debt_ebitda)}")
-        elif code == "anos_sem_corte":
-            fails.append(f"{f.years_without_cut} ano(s) sem corte")
+        elif code == "cortes":
+            fails.append(f"{cuts} cortes de dividendo em 5 anos")
+        elif code == "historico_curto":
+            fails.append("histórico de dividendos curto")
         elif code == "pvp":
             fails.append("sem VPA (preencha o VPA manual)" if pvp is None else f"P/VP {_pt(pvp, 2)}")
         elif code == "dy":
@@ -79,11 +83,14 @@ def _notes(kind: str, f: Fundamentals, p: Params, quality: QualityResult, divide
         parts.append("Reprovou: " + "; ".join(fails))
     if reference is not None:
         if kind == "fii":
-            parts.append("Referência: VPA × 1,10")
+            parts.append(f"Referência: VPA × {_pt(p.fii_max_pvp, 2)}")
         else:
             name = next((n for n, v in methods.items() if v is not None and v == reference), None)
             if name:
                 parts.append(f"Referência: {name}")
+            graham = methods.get("Graham")
+            if graham is not None and f.price is not None and f.price > graham:
+                parts.append("acima do Graham")
     return " | ".join(parts)
 
 
@@ -105,42 +112,61 @@ def analyze(ticker: str, kind: str, f: Fundamentals, p: Params, held: bool, now:
 
     bazin = graham = gordon = None
     pvp = dy = None
+    payout, cuts = f.payout, None
     if kind == "fii":
         quality = QualityResult(False, ["sem_dados"])
+        checks = 4
         reference = None
         if bvps:
             pvp = f.price / bvps
             dy = (f.dividend_12m / f.price) if f.dividend_12m is not None else None
             avg = (f.dividend_12m / f.months_paid_12m
                    if f.dividend_12m and f.months_paid_12m else None)
-            quality = fii_quality(FiiMetrics(pvp, dy, f.months_paid_12m, f.last_dividend, avg))
-            reference = bvps * 1.10
+            quality = fii_quality(FiiMetrics(pvp, dy, f.months_paid_12m, f.last_dividend, avg),
+                                  p.fii_max_pvp, p.fii_min_dy)
+            reference = bvps * p.fii_max_pvp
         regularity = f.months_paid_12m / 12
         dividend_cut = "queda_rendimento" in quality.failures
     else:
-        if not f.annual_dividends:
-            return row("sem_dados")
         divs = f.annual_dividends[-5:]
+        if not divs or (sum(divs) / len(divs)) / f.price < MIN_DIVIDEND_YIELD:
+            # empresa de crescimento: Bazin e Gordon dariam um teto sem sentido
+            return row("dado_velho" if age > p.max_age_days else "neutro", notes=LOW_DIVIDEND_NOTE)
+        us = kind == "eua"
+        required_return = p.us_required_return if us else p.required_return
+        inflation = p.us_inflation if us else p.inflation
+        unit = kind == "acao_br" and ticker.endswith("11")  # LPA do Yahoo é por ação, não por unit
+        typical = median(divs)
+        if unit:
+            payout = None
+        elif payout is not None and f.eps and f.eps > 0:
+            payout = min(payout, typical / f.eps)  # ano de dividendo extraordinário não conta
         bazin = bazin_ceiling(divs, p.target_dy) if kind == "acao_br" else None
-        per_share_eps = f.eps if not ticker.endswith("11") else None  # unit: LPA do Yahoo é por ação
-        graham = graham_fair_price(per_share_eps, bvps, p.graham_factor) if per_share_eps and bvps else None
-        if f.annual_dividends and f.annual_dividends[-1] > 0:
-            g = max(0.0, min(_growth(divs), GROWTH_CAP))
-            gordon = gordon_price(f.annual_dividends[-1] * (1 + g), p.required_return, g)
-        reference = reference_price([bazin, graham, gordon])
-        quality = check_quality(f.payout, f.net_debt_ebitda, f.years_without_cut,
-                                p.max_payout, p.max_leverage,
-                                check_leverage=f.sector != "Financial Services")  # banco não tem EBITDA
+        graham = (graham_fair_price(f.eps, bvps, p.graham_factor)
+                  if f.eps and bvps and not unit else None)
+        base = min(divs[-1], typical)
+        if base > 0:
+            g = max(inflation, min(_growth(divs[:-1] + [base]), GROWTH_CAP))
+            gordon = gordon_price(base * (1 + g), required_return, g, max(GROWTH_CAP, inflation))
+        reference = reference_price([bazin, gordon])  # Graham é só informativo
+        cuts = count_cuts(f.annual_dividends)
+        financial = f.sector == "Financial Services"  # banco não tem EBITDA
+        quality = check_quality(payout, f.net_debt_ebitda, cuts, p.max_payout, p.max_leverage,
+                                p.max_cuts, check_leverage=not financial, check_payout=not unit)
+        checks = 3 - int(financial) - int(unit)
         regularity = len([d for d in divs if d > 0]) / 5
-        dividend_cut = (len(f.annual_dividends) >= 2
-                        and f.annual_dividends[-1] < f.annual_dividends[-2] * (1 - DIVIDEND_CUT_TOLERANCE))
+        previous = f.annual_dividends[:-1]
+        floor = 1 - DIVIDEND_CUT_TOLERANCE
+        dividend_cut = (bool(previous) and divs[-1] < previous[-1] * floor
+                        and divs[-1] < median(previous[-4:]) * floor)
 
-    signal = classify(f.price, reference, quality, dividend_cut, f.payout, age, held,
+    signal = classify(f.price, reference, quality, dividend_cut, payout, age, held,
                       p.max_age_days, p.max_payout)
-    score = compute_score(f.price, reference, quality.passed, regularity, p.weights)
-    slack = round((reference - f.price) / reference * 100, 1) if reference else None
+    passed = max(0.0, 1 - len(quality.failures) / checks) if checks else 1.0
+    score = compute_score(f.price, reference, passed, regularity, p.weights)
+    slack = round((reference - f.price) / f.price * 100, 1) if reference else None
     notes = _notes(kind, f, p, quality, dividend_cut, pvp, dy, age,
-                   {"Bazin": bazin, "Graham": graham, "Gordon": gordon}, reference)
+                   {"Bazin": bazin, "Graham": graham, "Gordon": gordon}, reference, payout, cuts)
     return row(signal, bazin, graham, gordon, slack, score, reference, notes)
 
 
