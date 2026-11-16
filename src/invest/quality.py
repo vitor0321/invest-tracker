@@ -93,8 +93,10 @@ def rank_by_sector(universe: list[tuple[str, str]], data: dict[str, Fundamentals
 
 
 def portfolio_by_sector(holdings: dict[str, float], rows, sector_of: dict[str, str],
+                        reserve: float = 0.0, reserve_label: str = "CDB", usd_brl: float | None = None,
                         ) -> list[tuple[str, float, float | None]]:
-    """Valor por setor. Percentual só sobre o que está em reais; dólar fica à parte."""
+    """Valor por setor em reais. Com a cotação do dólar, o exterior entra convertido;
+    sem ela, fica à parte em US$ e fora do percentual."""
     brl: dict[str, float] = {}
     usd = 0.0
     by_ticker = {r.ticker: r for r in rows}
@@ -108,11 +110,15 @@ def portfolio_by_sector(holdings: dict[str, float], rows, sector_of: dict[str, s
         else:
             label = "FIIs" if r.kind == "fii" else sector_of.get(ticker, "Sem setor")
             brl[label] = brl.get(label, 0.0) + value
+    if usd and usd_brl:
+        brl["Exterior (EUA)"] = usd * usd_brl
+    if reserve and reserve > 0:
+        brl[f"Reserva de emergência ({reserve_label})"] = reserve
     total = sum(brl.values())
     out: list[tuple[str, float, float | None]] = [
         (label, round(value, 2), round(value / total * 100, 1))
         for label, value in sorted(brl.items(), key=lambda kv: -kv[1])
     ]
-    if usd:
+    if usd and not usd_brl:
         out.append(("Exterior (US$)", round(usd, 2), None))
     return out

@@ -65,7 +65,8 @@ class FakeSheet:
 
     def fetch_sheet_metadata(self, params=None):
         return {"sheets": [{"properties": {"sheetId": 7, "title": "Análise"},
-                            "conditionalFormats": [{}] * self.existing_rules}]}
+                            "conditionalFormats": [{}] * self.existing_rules,
+                            "charts": [{"chartId": 100 + i} for i in range(getattr(self, "existing_charts", 0))]}]}
 
     def batch_update(self, body):
         self.batches = getattr(self, "batches", []) + [body]
@@ -256,26 +257,16 @@ def test_read_universe_skips_blank_and_incomplete_rows():
     assert read_universe(sh) == [("Saúde", "RDOR3"), ("Financeiro", "ITUB4")]
 
 
-def test_write_best_puts_ranking_left_and_portfolio_block_right():
+def test_write_best_writes_only_the_ranking():
     sh = make_sheet()
     ensure_tabs(sh)
     best = [BestRow("Saúde", 1, "RDOR3", True, 82, 0.214, 0.10, 0.05, -0.02, 1.25, 0.031, 4, "fraco em: margem"),
             BestRow("Saúde", None, "XXXX3", False, None, None, None, None, None, None, None, None, "sem dados")]
-    write_best(sh, best, [("FIIs", 1000.0, 50.0), ("Exterior (US$)", 400.0, None)])
+    write_best(sh, best)
     v = sh.tabs["Melhores por setor"].values
-    assert v[0][14:17] == ["Carteira por setor", "Valor", "% do total em R$"]
-    assert v[1][:13] == ["Saúde", 1, "RDOR3", "Sim", 82, 21.4, 10.0, 5.0, -2.0, 1.25, 3.1, 4, "fraco em: margem"]
-    assert v[1][13:17] == ["", "FIIs", 1000.0, 50.0]
+    assert len(v[0]) == 13
+    assert v[1] == ["Saúde", 1, "RDOR3", "Sim", 82, 21.4, 10.0, 5.0, -2.0, 1.25, 3.1, 4, "fraco em: margem"]
     assert v[2][:5] == ["Saúde", "", "XXXX3", "", ""] and v[2][12] == "sem dados"
-    assert v[2][14:17] == ["Exterior (US$)", 400.0, ""]
-
-
-def test_write_best_with_more_portfolio_lines_than_ranking_rows():
-    sh = make_sheet()
-    ensure_tabs(sh)
-    write_best(sh, [], [("FIIs", 10.0, 100.0)])
-    v = sh.tabs["Melhores por setor"].values
-    assert v[1][:13] == [""] * 13 and v[1][14] == "FIIs"
 
 
 def test_quality_weights_default_on_old_sheet_and_read_when_present():
@@ -341,3 +332,89 @@ def test_growth_track_params():
     assert p.growth_cap == 0.15 and p.min_roe == 0.15
     _set_param(sh, "crescimento_max", 0.10)
     assert read_params(sh).growth_cap == 0.10
+
+
+# --- resumo, reserva de emergência e gráfico ---
+from invest.portfolio import Summary
+from invest.sheets import format_summary, write_summary
+
+
+def test_reserve_params_default_to_zero_and_are_read():
+    sh = make_sheet()
+    ensure_tabs(sh)
+    p = read_params(sh)
+    assert p.reserve == 0.0 and p.reserve_label == "CDB"
+    _set_param(sh, "reserva_emergencia", 15000)
+    _set_param(sh, "reserva_onde", "Tesouro Selic")
+    p = read_params(sh)
+    assert p.reserve == 15000.0 and p.reserve_label == "Tesouro Selic"
+
+
+def _summary():
+    opp = AnalysisRow("acao_br", "CMIG4", 11.03, 12.97, None, None, 17.6, 57, "oportunidade", "yahoo", "d",
+                      reference=12.97, notes="Referência: Bazin")
+    att = AnalysisRow("eua", "GOOGL", 295.77, None, None, None, -50.6, 40, "caro", "yahoo", "d",
+                      reference=146.17, held=True, notes="Trilho crescimento")
+    return Summary("2026-11-16", [("Financeiro", 5000.0, 50.0), ("Reserva de emergência (CDB)", 4000.0, 40.0),
+                                  ("FIIs", 1000.0, 10.0)], 10000.0, 5.4,
+                   [("oportunidade", 0, 1), ("caro", 1, 0)], [opp], [att])
+
+
+def test_write_summary_lays_out_blocks_and_returns_their_rows():
+    sh = make_sheet()
+    ensure_tabs(sh)
+    layout = write_summary(sh, _summary())
+    v = sh.tabs["Resumo"].values
+    assert v[0][0] == "Resumo da carteira" and "2026-11-16" in v[0][1]
+    d = layout["dist_first"]
+    assert v[d - 1][:3] == ["Distribuição do patrimônio", "Valor (R$)", "% do total"]
+    assert v[d][:3] == ["Financeiro", 5000.0, 50.0] and layout["dist_rows"] == 3
+    assert v[d + 3][:2] == ["Total", 10000.0]
+    flat = [c for row in v for c in row]
+    assert "CMIG4" in flat and "GOOGL" in flat and "Dólar usado" in flat
+    for r in layout["section_rows"]:
+        assert v[r][0] != ""
+    assert layout["dist_first"] - 1 in layout["section_rows"]
+
+
+def test_format_summary_replaces_old_charts_with_one_pie_over_the_distribution():
+    sh = make_sheet()
+    ensure_tabs(sh)
+    layout = write_summary(sh, _summary())
+    sh.existing_charts = 2
+    format_summary(sh, layout)
+    reqs = sh.batches[-1]["requests"]
+    assert [q["deleteEmbeddedObject"]["objectId"] for q in reqs if "deleteEmbeddedObject" in q] == [100, 101]
+    charts = [q["addChart"]["chart"] for q in reqs if "addChart" in q]
+    assert len(charts) == 1
+    pie = charts[0]["spec"]["pieChart"]
+    dom = pie["domain"]["sourceRange"]["sources"][0]
+    ser = pie["series"]["sourceRange"]["sources"][0]
+    d = layout["dist_first"]
+    assert (dom["startRowIndex"], dom["endRowIndex"], dom["startColumnIndex"]) == (d, d + 3, 0)
+    assert (ser["startRowIndex"], ser["endRowIndex"], ser["startColumnIndex"]) == (d, d + 3, 1)
+
+
+def test_analysis_format_adds_zebra_and_wraps_reason_column():
+    from invest.sheets import build_format_requests
+
+    reqs = build_format_requests(7)
+    formulas = [q["addConditionalFormatRule"]["rule"]["booleanRule"]["condition"]["values"][0]["userEnteredValue"]
+                for q in reqs if "addConditionalFormatRule" in q
+                and q["addConditionalFormatRule"]["rule"]["booleanRule"]["condition"]["type"] == "CUSTOM_FORMULA"]
+    assert any("ISEVEN(ROW())" in f for f in formulas)
+    wraps = [q for q in reqs if "repeatCell" in q
+             and q["repeatCell"]["cell"]["userEnteredFormat"].get("wrapStrategy") == "WRAP"
+             and q["repeatCell"]["range"]["startColumnIndex"] == 11]
+    assert wraps
+
+
+def test_no_request_field_mask_uses_parentheses():
+    # a API recusa "userEnteredFormat(a,b)" em pedidos de escrita: tem de ser caminho completo
+    from invest.sheets import build_best_format_requests, build_format_requests, build_summary_format_requests
+
+    layout = {"dist_first": 3, "dist_rows": 2, "dist_total_rows": 2, "section_rows": [2, 23], "lists_first": 27,
+              "total_rows": 30}
+    reqs = build_format_requests(7) + build_best_format_requests(7) + build_summary_format_requests(7, layout, [])
+    masks = [body["fields"] for q in reqs for body in q.values() if isinstance(body, dict) and "fields" in body]
+    assert masks and not [m for m in masks if "(" in m]

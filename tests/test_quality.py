@@ -100,3 +100,15 @@ def test_portfolio_by_sector_weights_brl_and_keeps_usd_apart():
     assert by["FIIs"] == (1000.0, 50.0)
     assert by["Exterior (US$)"] == (400.0, None)
     assert out[0][0] == "FIIs" and out[-1][0] == "Exterior (US$)"  # maior primeiro, dólar por último
+
+
+def test_portfolio_converts_usd_and_includes_emergency_reserve():
+    holdings = {"ITUB4": 10, "MXRF11": 100, "AAPL": 2}
+    rows = [row("acao_br", "ITUB4", 100.0), row("fii", "MXRF11", 10.0), row("eua", "AAPL", 200.0)]
+    out = portfolio_by_sector(holdings, rows, {"ITUB4": "Financeiro"}, reserve=1000.0, reserve_label="CDB",
+                              usd_brl=5.0)
+    by = {label: (value, pct) for label, value, pct in out}
+    assert by["Exterior (EUA)"] == (2000.0, 40.0)
+    assert by["Reserva de emergência (CDB)"] == (1000.0, 20.0)
+    assert by["Financeiro"] == (1000.0, 20.0) and by["FIIs"] == (1000.0, 20.0)
+    assert "Exterior (US$)" not in by

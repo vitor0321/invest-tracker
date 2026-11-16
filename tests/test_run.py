@@ -488,3 +488,34 @@ def test_build_best_fetches_us_tickers_in_the_us_market():
     rows = [AR("eua", "GOOGL", 300.0, None, None, None, None, None, "neutro", "yahoo", "d", held=True)]
     build_best([("EUA", "GOOGL"), ("Financeiro", "ITUB4"), ("EUA", "MSFT")], {"GOOGL": 1}, rows, PARAMS, Rec())
     assert seen == [("GOOGL", "us"), ("ITUB4", "br"), ("MSFT", "us")]  # setor "EUA" também vale
+
+
+# --- resumo e e-mail novo ---
+def test_build_summary_counts_signals_and_picks_lists():
+    from invest.portfolio import build_summary
+
+    rows = [AR("acao_br", "ITUB4", 100.0, None, None, None, 10.0, 60, "oportunidade", "yahoo", "d", held=True),
+            AR("acao_br", "CMIG4", 11.0, None, None, None, 17.0, 57, "oportunidade", "yahoo", "d"),
+            AR("eua", "GOOGL", 300.0, None, None, None, -50.0, 40, "caro", "yahoo", "d", held=True),
+            AR("acao_br", "WEGE3", 50.0, None, None, None, None, None, "neutro", "yahoo", "d")]
+    s = build_summary({"ITUB4": 10, "GOOGL": 1}, rows, {"ITUB4": "Financeiro"}, 1000.0, "CDB", 5.0, "2026-11-16")
+    assert s.total_brl == 3500.0 and s.usd_brl == 5.0
+    assert ("oportunidade", 1, 1) in s.counts and ("caro", 1, 0) in s.counts
+    assert [r.ticker for r in s.opportunities] == ["ITUB4", "CMIG4"]  # maior nota primeiro
+    assert [r.ticker for r in s.attention] == ["GOOGL"]
+
+
+def test_new_email_groups_by_urgency_and_explains_each_change():
+    from invest.alerts import render_email_html
+
+    rows = [AR("eua", "GOOGL", 295.77, None, None, None, -50.6, 40, "caro", "yahoo", "d", reference=146.17,
+               held=True, notes="Trilho crescimento | PEG 2,9"),
+            AR("acao_br", "CMIG4", 11.03, 12.97, None, None, 17.6, 57, "oportunidade", "yahoo", "d",
+               reference=12.97, notes="Referência: Bazin")]
+    html = render_email_html([SignalChange("CMIG4", "novo", "oportunidade", "d"),
+                              SignalChange("GOOGL", "novo", "caro", "d")], rows)
+    assert html.index("Atenção") < html.index("GOOGL") < html.index("Oportunidades") < html.index("CMIG4")
+    assert "US$ 295,77" in html and "R$ 11,03" in html
+    assert "PEG 2,9" in html and "Referência: Bazin" in html
+    assert "docs.google.com/spreadsheets/d/" in html
+    assert "1 oportunidade" in html and "1 caro" in html

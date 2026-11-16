@@ -9,6 +9,7 @@ from typing import Callable
 from invest import alerts, sheets
 from invest.data.base import DataProvider, Fundamentals
 from invest.data.yahoo import YahooProvider
+from invest.portfolio import build_summary
 from invest.quality import portfolio_by_sector, rank_by_sector
 from invest.scoring import classify, compute_score
 from invest.sheets import AnalysisRow, Params, SignalChange, WatchItem
@@ -305,12 +306,25 @@ def main() -> int:
         sheets.format_analysis(sh)
     except Exception as exc:  # visual nunca derruba a rodada
         log.warning("formatação falhou: %s", exc)
-    try:  # aba extra: nunca derruba a rodada principal
-        best, portfolio = build_best(sheets.read_universe(sh), holdings, rows, params, provider)
-        sheets.write_best(sh, best, portfolio)
+    universe: list[tuple[str, str]] = []
+    try:  # abas extras: nunca derrubam a rodada principal
+        universe = sheets.read_universe(sh)
+        best, _ = build_best(universe, holdings, rows, params, provider)
+        sheets.write_best(sh, best)
         sheets.format_best(sh)
     except Exception as exc:
         log.warning("melhores por setor falhou: %s", exc)
+    try:
+        usd_brl = None
+        try:
+            usd_brl = provider.fetch("BRL=X", "us").price  # dólar em reais
+        except Exception as exc:
+            log.warning("cotação do dólar falhou: %s", exc)
+        summary = build_summary(holdings, rows, {t: s for s, t in universe}, params.reserve,
+                                params.reserve_label, usd_brl, now.date().isoformat())
+        sheets.format_summary(sh, sheets.write_summary(sh, summary))
+    except Exception as exc:
+        log.warning("resumo falhou: %s", exc)
     return 0
 
 

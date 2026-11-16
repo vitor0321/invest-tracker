@@ -11,8 +11,8 @@ from gspread.exceptions import WorksheetNotFound  # noqa: F401 (reexportado)
 
 SHEET_ID = "1ukZLWORhufJVCoo7SsqMFyPVQNY5ykr0IcfmdfIwHkw"
 ANALYSIS, WATCH, PARAMS, HISTORY = "Análise", "Observação", "Parâmetros", "Histórico de sinais"
-UNIVERSE, BEST = "Universo", "Melhores por setor"
-OWN_TABS = (ANALYSIS, WATCH, PARAMS, HISTORY, UNIVERSE, BEST)
+UNIVERSE, BEST, SUMMARY = "Universo", "Melhores por setor", "Resumo"
+OWN_TABS = (ANALYSIS, WATCH, PARAMS, HISTORY, UNIVERSE, BEST, SUMMARY)
 
 # Candidatos iniciais por setor (editável na aba Universo). O ranking mostra os 5 melhores de cada.
 SEED_UNIVERSE = {
@@ -28,7 +28,8 @@ SEED_UNIVERSE = {
 }
 BEST_HEADER = ["Setor", "Pos", "Papel", "Carteira", "Nota", "ROE %", "Margem %", "Cresc. lucro %",
                "Cresc. receita %", "Dív/EBITDA", "DY 12m %", "Anos sem corte", "Motivo"]
-PORTFOLIO_HEADER = ["Carteira por setor", "Valor", "% do total em R$"]
+LIST_HEADER = ["Tipo", "Carteira", "Preço", "Referência", "Folga %", "Nota", "Motivo"]
+SUMMARY_COLS = 8
 
 DEFAULT_PARAMS = [
     ("ntnb_real", 0.074),          # juro real do Tesouro IPCA+ longo; atualizar todo mês
@@ -42,6 +43,8 @@ DEFAULT_PARAMS = [
     ("fii_pvp_max", 1.0),          # FII só é oportunidade até esse P/VP
     ("fii_dy_min", ""),            # vazio = ntnb_real + 1 ponto; número = sobrescreve
     ("cortes_max", 1),             # cortes de dividendo (>20%) tolerados em 5 anos
+    ("reserva_emergencia", 0),     # reserva de emergência em reais (entra no Resumo)
+    ("reserva_onde", "CDB"),       # onde a reserva está aplicada (só o nome)
     ("crescimento_max", 0.15),     # trilho de crescimento: teto do crescimento na fórmula de Graham
     ("roe_min", 0.15),             # trilho de crescimento: ROE mínimo
     ("graham_fator", 22.5),
@@ -106,6 +109,8 @@ class Params:
     us_risk_free: float = 0.044       # título de 10 anos dos EUA
     growth_cap: float = 0.15          # crescimento máximo aceito na fórmula de Graham
     min_roe: float = 0.15
+    reserve: float = 0.0              # reserva de emergência, em reais
+    reserve_label: str = "CDB"
 
 
 @dataclass
@@ -210,7 +215,9 @@ def ensure_tabs(sh) -> None:
             write_tab(sh, UNIVERSE, [["Setor", "Papel"]] + [[sector, t] for sector, tickers
                                                              in SEED_UNIVERSE.items() for t in tickers])
         elif title == BEST:
-            write_tab(sh, BEST, [BEST_HEADER + [""] + PORTFOLIO_HEADER])
+            write_tab(sh, BEST, [BEST_HEADER])
+        elif title == SUMMARY:
+            write_tab(sh, SUMMARY, [["Resumo da carteira", "aguardando a primeira rodada"]])
 
 
 ANALYSIS_HEADER = ["Tipo", "Papel", "Carteira", "Preço", "Bazin", "Graham", "Gordon", "Referência",
@@ -226,6 +233,11 @@ SIGNAL_COLORS = {
     "sem_dados": ((0.93, 0.93, 0.93), (0.45, 0.45, 0.45)),
 }
 COLUMN_WIDTHS = [70, 85, 75, 85, 85, 85, 85, 100, 80, 60, 115, 340, 75, 105]
+
+
+def _mask(prefix: str, *names: str) -> str:
+    """Máscara de campos com caminho completo (a API não aceita parênteses em pedidos de escrita)."""
+    return ",".join(f"{prefix}.{name}" for name in names)
 
 
 def _sort_key(r: AnalysisRow):
@@ -247,28 +259,43 @@ def build_format_requests(sheet_id: int, existing_rules: int = 0) -> list[dict]:
     reqs.append({"updateSheetProperties": {
         "properties": {"sheetId": sheet_id,
                        "gridProperties": {"frozenRowCount": 1, "frozenColumnCount": 2}},
-        "fields": "gridProperties(frozenRowCount,frozenColumnCount)"}})
+        "fields": _mask("gridProperties", "frozenRowCount", "frozenColumnCount")}})
     reqs.append({"repeatCell": {
         "range": rng(0, n, 0, 1),
         "cell": {"userEnteredFormat": {
             "backgroundColor": color((0.12, 0.23, 0.37)),
             "textFormat": {"bold": True, "foregroundColor": color((1, 1, 1))},
             "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP"}},
-        "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,"
-                  "verticalAlignment,wrapStrategy)"}})
+        "fields": _mask("userEnteredFormat", "backgroundColor", "textFormat", "horizontalAlignment", "verticalAlignment", "wrapStrategy")}})
     for c0, c1, pattern in ((3, 8, "#,##0.00"), (8, 9, '0.0"%"'), (9, 10, "0")):
         reqs.append({"repeatCell": {
             "range": rng(c0, c1),
             "cell": {"userEnteredFormat": {"numberFormat": {"type": "NUMBER", "pattern": pattern},
                                            "horizontalAlignment": "RIGHT"}},
-            "fields": "userEnteredFormat(numberFormat,horizontalAlignment)"}})
+            "fields": _mask("userEnteredFormat", "numberFormat", "horizontalAlignment")}})
     reqs.append({"repeatCell": {
         "range": rng(2, 3), "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
-        "fields": "userEnteredFormat(horizontalAlignment)"}})
+        "fields": _mask("userEnteredFormat", "horizontalAlignment")}})
     reqs.append({"repeatCell": {
         "range": rng(10, 11),
         "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER", "textFormat": {"bold": True}}},
-        "fields": "userEnteredFormat(horizontalAlignment,textFormat)"}})
+        "fields": _mask("userEnteredFormat", "horizontalAlignment", "textFormat")}})
+    reqs.append({"repeatCell": {
+        "range": rng(0, n), "cell": {"userEnteredFormat": {"verticalAlignment": "MIDDLE"}},
+        "fields": "userEnteredFormat.verticalAlignment"}})
+    reqs.append({"repeatCell": {
+        "range": rng(11, 12), "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP"}},
+        "fields": "userEnteredFormat.wrapStrategy"}})
+    reqs.append({"addConditionalFormatRule": {"index": 0, "rule": {  # zebra: entra primeiro, menor prioridade
+        "ranges": [rng(0, n)],
+        "booleanRule": {
+            "condition": {"type": "CUSTOM_FORMULA", "values": [{"userEnteredValue": "=ISEVEN(ROW())"}]},
+            "format": {"backgroundColor": color((0.96, 0.97, 0.99))}}}}})
+    reqs.append({"addConditionalFormatRule": {"index": 0, "rule": {  # o que está na carteira em negrito
+        "ranges": [rng(1, 2)],
+        "booleanRule": {
+            "condition": {"type": "CUSTOM_FORMULA", "values": [{"userEnteredValue": '=$C2="Sim"'}]},
+            "format": {"textFormat": {"bold": True}}}}}})
     for signal, (bg, fg) in SIGNAL_COLORS.items():
         reqs.append({"addConditionalFormatRule": {"index": 0, "rule": {
             "ranges": [rng(10, 11)],
@@ -334,6 +361,8 @@ def read_params(sh) -> Params:
         us_risk_free=rate("eua_treasury_10a", 0.049),
         growth_cap=rate("crescimento_max", 0.15),
         min_roe=rate("roe_min", 0.15),
+        reserve=rate("reserva_emergencia", 0.0),
+        reserve_label=str(kv.get("reserva_onde") or "CDB").strip() or "CDB",
         types=types,
         vpa_manual={
             str(r[3]).strip(): v
@@ -386,21 +415,122 @@ def _pct(x: float | None) -> float | str:
     return "" if x is None else round(x * 100, 1)
 
 
-def write_best(sh, best: list[BestRow], portfolio: list[tuple[str, float, float | None]]) -> None:
-    left = [[b.sector, b.position, b.ticker, "Sim" if b.held else "", b.score, _pct(b.roe), _pct(b.margin),
+def write_best(sh, best: list[BestRow]) -> None:
+    rows = [[b.sector, b.position, b.ticker, "Sim" if b.held else "", b.score, _pct(b.roe), _pct(b.margin),
              _pct(b.earnings_growth), _pct(b.revenue_growth),
              None if b.net_debt_ebitda is None else round(b.net_debt_ebitda, 2),
              _pct(b.dy_12m), b.years_without_cut, b.notes] for b in best]
-    right = [list(p) for p in portfolio]
-    rows = [BEST_HEADER + [""] + PORTFOLIO_HEADER]
-    for i in range(max(len(left), len(right))):
-        a = left[i] if i < len(left) else [""] * len(BEST_HEADER)
-        b = right[i] if i < len(right) else [""] * len(PORTFOLIO_HEADER)
-        rows.append(["" if v is None else v for v in a + [""] + b])
-    write_tab(sh, BEST, rows)
+    write_tab(sh, BEST, [BEST_HEADER] + [["" if v is None else v for v in r] for r in rows])
 
 
-BEST_WIDTHS = [210, 45, 80, 75, 60, 70, 80, 95, 105, 95, 80, 95, 300, 30, 210, 110, 120]
+def write_summary(sh, s) -> dict:
+    """Grava a aba Resumo e devolve onde cada bloco ficou (para a formatação e o gráfico)."""
+    rows: list[list] = [["Resumo da carteira", f"Atualizado em {s.date}"], []]
+    sections = [len(rows)]
+    rows.append(["Distribuição do patrimônio", "Valor (R$)", "% do total"])
+    dist_first = len(rows)
+    rows += [[label, value, "" if pct is None else pct] for label, value, pct in s.distribution]
+    dist_rows = sum(1 for _, _, pct in s.distribution if pct is not None)
+    rows.append(["Total", s.total_brl])
+    rows.append(["Dólar usado", s.usd_brl if s.usd_brl else "sem cotação: exterior em US$, fora do %"])
+    while len(rows) < 22:  # espaço para o gráfico, que fica ao lado
+        rows.append([])
+    rows.append([])
+    sections.append(len(rows))
+    rows.append(["Sinais de hoje", "Na carteira", "Em observação"])
+    rows += [[signal, held, watch] for signal, held, watch in s.counts]
+    lists_first = len(rows)
+    for title, items in (("Oportunidades", s.opportunities),
+                         ("Atenção na carteira (caro e risco)", s.attention)):
+        rows.append([])
+        sections.append(len(rows))
+        rows.append([title] + LIST_HEADER)
+        rows += [[r.ticker, r.kind, "Sim" if r.held else "", r.price, r.reference, r.slack_pct, r.score, r.notes]
+                 for r in items] or [["nenhum hoje"]]
+    padded = [["" if v is None else v for v in r] + [""] * (SUMMARY_COLS - len(r)) for r in rows]
+    write_tab(sh, SUMMARY, padded)
+    return {"dist_first": dist_first, "dist_rows": dist_rows, "dist_total_rows": len(s.distribution),
+            "section_rows": sections,
+            "lists_first": lists_first, "total_rows": len(rows)}
+
+
+SUMMARY_WIDTHS = [290, 120, 110, 95, 95, 85, 60, 420]
+
+
+def build_summary_format_requests(sheet_id: int, layout: dict, chart_ids: list[int]) -> list[dict]:
+    def rng(c0, c1, r0, r1):
+        return {"sheetId": sheet_id, "startRowIndex": r0, "endRowIndex": r1,
+                "startColumnIndex": c0, "endColumnIndex": c1}
+
+    def color(rgb):
+        return {"red": rgb[0], "green": rgb[1], "blue": rgb[2]}
+
+    def fmt(c0, c1, r0, r1, pattern):
+        return {"repeatCell": {
+            "range": rng(c0, c1, r0, r1),
+            "cell": {"userEnteredFormat": {"numberFormat": {"type": "NUMBER", "pattern": pattern},
+                                           "horizontalAlignment": "RIGHT"}},
+            "fields": _mask("userEnteredFormat", "numberFormat", "horizontalAlignment")}}
+
+    d, n, end = layout["dist_first"], layout["dist_rows"], max(layout["total_rows"], 200)
+    reqs: list[dict] = [{"deleteEmbeddedObject": {"objectId": cid}} for cid in chart_ids]
+    reqs.append({"repeatCell": {"range": rng(0, SUMMARY_COLS, 0, end), "cell": {"userEnteredFormat": {}},
+                                "fields": "userEnteredFormat"}})  # limpa a formatação da rodada anterior
+    reqs.append({"repeatCell": {
+        "range": rng(0, 1, 0, 1),
+        "cell": {"userEnteredFormat": {"textFormat": {"bold": True, "fontSize": 16}}},
+        "fields": "userEnteredFormat.textFormat"}})
+    for r in layout["section_rows"]:
+        reqs.append({"repeatCell": {
+            "range": rng(0, SUMMARY_COLS if r >= layout["lists_first"] else 3, r, r + 1),
+            "cell": {"userEnteredFormat": {
+                "backgroundColor": color((0.12, 0.23, 0.37)),
+                "textFormat": {"bold": True, "foregroundColor": color((1, 1, 1))}}},
+            "fields": _mask("userEnteredFormat", "backgroundColor", "textFormat")}})
+    total_row = d + len_dist(layout)
+    reqs += [fmt(1, 2, d, total_row + 2, "#,##0.00"), fmt(2, 3, d, total_row, '0.0"%"'),
+             fmt(3, 5, layout["lists_first"], end, "#,##0.00"), fmt(5, 6, layout["lists_first"], end, '0.0"%"')]
+    reqs.append({"repeatCell": {
+        "range": rng(0, 2, total_row, total_row + 1),
+        "cell": {"userEnteredFormat": {"textFormat": {"bold": True}}},
+        "fields": "userEnteredFormat.textFormat"}})
+    reqs.append({"repeatCell": {
+        "range": rng(7, 8, layout["lists_first"], end),
+        "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP"}}, "fields": "userEnteredFormat.wrapStrategy"}})
+    for i, width in enumerate(SUMMARY_WIDTHS):
+        reqs.append({"updateDimensionProperties": {
+            "range": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": i, "endIndex": i + 1},
+            "properties": {"pixelSize": width}, "fields": "pixelSize"}})
+    if n:
+        reqs.append({"addChart": {"chart": {
+            "spec": {
+                "title": "Distribuição do patrimônio",
+                "pieChart": {
+                    "legendPosition": "RIGHT_LEGEND",
+                    "pieHole": 0.45,
+                    "domain": {"sourceRange": {"sources": [rng(0, 1, d, d + n)]}},
+                    "series": {"sourceRange": {"sources": [rng(1, 2, d, d + n)]}},
+                }},
+            "position": {"overlayPosition": {
+                "anchorCell": {"sheetId": sheet_id, "rowIndex": 2, "columnIndex": 3},
+                "offsetXPixels": 20, "widthPixels": 560, "heightPixels": 380}}}}})
+    return reqs
+
+
+def len_dist(layout: dict) -> int:
+    """Linhas do bloco de distribuição, incluindo uma eventual linha em US$ fora do percentual."""
+    return layout.get("dist_total_rows", layout["dist_rows"])
+
+
+def format_summary(sh, layout: dict) -> None:
+    ws = sh.worksheet(SUMMARY)
+    meta = sh.fetch_sheet_metadata({"fields": "sheets(properties(sheetId),charts(chartId))"})
+    charts = next(([c["chartId"] for c in s.get("charts", [])] for s in meta.get("sheets", [])
+                   if s.get("properties", {}).get("sheetId") == ws.id), [])
+    sh.batch_update({"requests": build_summary_format_requests(ws.id, layout, charts)})
+
+
+BEST_WIDTHS = [210, 45, 80, 75, 60, 70, 80, 95, 105, 95, 80, 95, 380]
 
 
 def build_best_format_requests(sheet_id: int, existing_rules: int = 0) -> list[dict]:
@@ -416,7 +546,7 @@ def build_best_format_requests(sheet_id: int, existing_rules: int = 0) -> list[d
             "range": rng(c0, c1),
             "cell": {"userEnteredFormat": {"numberFormat": {"type": "NUMBER", "pattern": pattern},
                                            "horizontalAlignment": "RIGHT"}},
-            "fields": "userEnteredFormat(numberFormat,horizontalAlignment)"}}
+            "fields": _mask("userEnteredFormat", "numberFormat", "horizontalAlignment")}}
 
     n = len(BEST_HEADER)
     reqs: list[dict] = [{"deleteConditionalFormatRule": {"sheetId": sheet_id, "index": 0}}
@@ -424,21 +554,27 @@ def build_best_format_requests(sheet_id: int, existing_rules: int = 0) -> list[d
     reqs.append({"updateSheetProperties": {
         "properties": {"sheetId": sheet_id, "gridProperties": {"frozenRowCount": 1}},
         "fields": "gridProperties.frozenRowCount"}})
-    for c0, c1 in ((0, n), (n + 1, n + 1 + len(PORTFOLIO_HEADER))):
+    for c0, c1 in ((0, n),):
         reqs.append({"repeatCell": {
             "range": rng(c0, c1, 0, 1),
             "cell": {"userEnteredFormat": {
                 "backgroundColor": color((0.12, 0.23, 0.37)),
                 "textFormat": {"bold": True, "foregroundColor": color((1, 1, 1))},
                 "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP"}},
-            "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,"
-                      "verticalAlignment,wrapStrategy)"}})
-    reqs += [fmt(5, 9, '0.0"%"'), fmt(9, 10, "0.00"), fmt(10, 11, '0.0"%"'),
-             fmt(15, 16, "#,##0.00"), fmt(16, 17, '0.0"%"')]
+            "fields": _mask("userEnteredFormat", "backgroundColor", "textFormat", "horizontalAlignment", "verticalAlignment", "wrapStrategy")}})
+    reqs += [fmt(5, 9, '0.0"%"'), fmt(9, 10, "0.00"), fmt(10, 11, '0.0"%"')]
+    reqs.append({"repeatCell": {
+        "range": rng(12, 13), "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP"}},
+        "fields": "userEnteredFormat.wrapStrategy"}})
+    reqs.append({"addConditionalFormatRule": {"index": 0, "rule": {
+        "ranges": [rng(0, 4)],
+        "booleanRule": {
+            "condition": {"type": "CUSTOM_FORMULA", "values": [{"userEnteredValue": "=$B2=1"}]},
+            "format": {"backgroundColor": color((0.87, 0.92, 0.97)), "textFormat": {"bold": True}}}}}})
     for c0, c1 in ((1, 2), (3, 5), (11, 12)):
         reqs.append({"repeatCell": {
             "range": rng(c0, c1), "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
-            "fields": "userEnteredFormat(horizontalAlignment)"}})
+            "fields": _mask("userEnteredFormat", "horizontalAlignment")}})
     for cond, value, (bg, fg) in (("NUMBER_GREATER_THAN_EQ", "70", SIGNAL_COLORS["oportunidade"]),
                                   ("NUMBER_LESS", "40", SIGNAL_COLORS["risco"])):
         reqs.append({"addConditionalFormatRule": {"index": 0, "rule": {
